@@ -1,0 +1,44 @@
+Third-party reuse notice
+========================
+
+This package is MIT-licensed and includes implementation ideas and API design
+adaptations from the FastqIndEx project:
+
+  https://github.com/DKFZ-ODCF/FastqIndEx
+
+FastqIndEx is distributed under the MIT License.
+
+Upstream reference (paths and lineage; vendored files may differ where adapted):
+- Repository: https://github.com/DKFZ-ODCF/FastqIndEx
+- Branch: `master`
+- Commit: `e21ef731a1f3341e5ac4525146891689e0cbf9ce` (2021-06-21)
+
+Reuse/compliance notes:
+- Retain MIT licensing for reused/adapted portions.
+- Preserve attribution to the original FastqIndEx project.
+- Keep this notice updated when additional upstream source files are vendored
+  or modified.
+
+Current adaptation scope:
+- Vendored/adapted core algorithms in:
+  - src/fastqindex_core/common/CommonStructsAndConstants.h
+  - src/fastqindex_core/process/base/IndexEntry.h
+  - src/fastqindex_core/process/base/ZLibBasedFASTQProcessorBaseClass.h
+  - src/fastqindex_core/process/base/ZLibBasedFASTQProcessorBaseClass.cpp
+  - src/fastqindex_core/process/index/Indexer.h
+  - src/fastqindex_core/process/index/Indexer.cpp
+  - src/fastqindex_core/process/extract/Extractor.h
+  - src/fastqindex_core/process/extract/Extractor.cpp
+- Local gzip FASTA/FASTQ indexing and extraction behavior shaped after the
+  FastqIndEx indexing/extraction model.
+- R/Rcpp-facing API designed for in-memory index handling.
+
+Annotated local changes in adapted core:
+- fastqindexr change: Replace FastqIndEx Source/Sink abstractions with
+  std::ifstream and in-memory index registry token handling.
+- fastqindexr change: Keep dictionary payload uncompressed in memory (no .fqi
+  serialization path in this package).
+- fastqindexr change: Dense-region extraction planner for arbitrary index
+  vectors with result reordering to caller order.
+- fastqindexr change: Current FASTA extraction path assumes one sequence line
+  per record (record_size=2).

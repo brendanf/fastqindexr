@@ -1,0 +1,28 @@
+Package: fastqindexr
+Type: Package
+Title: Random-Access Style Extraction from Gzipped FASTA and FASTQ
+Version: 0.0.1
+Authors@R: c(
+    person(
+      given = "Brendan",
+      family = "Furneaux",
+      role = c("aut", "cre"),
+      email = "brendan.furneaux@gmail.com"
+    )
+  )
+Description: Builds in-memory indexes for gzipped FASTA and FASTQ inputs and
+    extracts arbitrary subsets of records through an Rcpp backend. Multiple
+    files can be indexed as a single logical concatenated source.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports:
+    Rcpp
+Suggests:
+    testthat (>= 3.0.0),
+    Biostrings
+LinkingTo:
+    Rcpp
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Config/testthat/edition: 3

@@ -1,0 +1,5 @@
+useDynLib(fastqindexr, .registration = TRUE)
+importFrom(Rcpp, evalCpp)
+export(create_index)
+export(extract_sequences)
+export(print.fastqindexr_index)
