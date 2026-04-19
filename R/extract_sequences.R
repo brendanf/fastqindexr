@@ -1,3 +1,4 @@
+#' @noRd
 validate_index <- function(index) {
   if (!inherits(index, "fastqindexr_index")) {
     stop("`index` must be a fastqindexr_index object.", call. = FALSE)
@@ -13,6 +14,43 @@ validate_index <- function(index) {
   index
 }
 
+#' Extract sequence records by ID from indexed gzipped FASTA or FASTQ
+#'
+#' Returns rows in **the same order as `ids`**, including duplicate IDs. IDs are
+#' **1-based** record indices in the logical concatenated stream defined when
+#' the index was built (see [create_index()]).
+#'
+#' @param index A `fastqindexr_index` object from [create_index()].
+#' @param ids Numeric vector of record IDs (positive whole numbers). Values are
+#'   coerced via [as.numeric()]; `NA` and values outside `1` … `n_records` are
+#'   errors.
+#' @param file Optional character vector of file paths overriding those stored in
+#'   `index$files`. Must be the same length as `index$files` when provided; each
+#'   path must exist. Use this when data moved after indexing.
+#'
+#' @return A data frame:
+#' \describe{
+#'   \item{FASTA}{Columns `seq_id` and `seq`.}
+#'   \item{FASTQ}{Columns `seq_id`, `seq`, and `qual`.}
+#' }
+#' For `length(ids) == 0`, an empty data frame with the appropriate columns is
+#' returned.
+#'
+#' @section FASTA limitation:
+#' Each record must consist of a header line plus **one** sequence line.
+#'
+#' @seealso [create_index()]
+#'
+#' @examples
+#' path <- tempfile(fileext = ".fastq.gz")
+#' con <- gzfile(path, "wt")
+#' writeLines(c("@r1", "ACGT", "+", "!!!!", "@r2", "TTAA", "+", "####"), con)
+#' close(con)
+#' idx <- create_index(path, type = "fastq")
+#' extract_sequences(idx, ids = c(2, 2, 1))
+#' unlink(path)
+#'
+#' @export
 extract_sequences <- function(index, ids, file = NULL) {
   index <- validate_index(index)
 

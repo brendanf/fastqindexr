@@ -20,9 +20,10 @@ Imports:
     Rcpp
 Suggests:
     testthat (>= 3.0.0),
-    Biostrings
+    Biostrings,
+    roxygen2 (>= 7.0.0)
 LinkingTo:
     Rcpp
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.2
+RoxygenNote: 7.3.3
 Config/testthat/edition: 3
