@@ -4,14 +4,14 @@
 \alias{extract_sequences}
 \title{Extract sequence records by ID from indexed gzipped FASTA or FASTQ}
 \usage{
-extract_sequences(index, ids, file = NULL)
+extract_sequences(index, seq_idx, file = NULL)
 }
 \arguments{
 \item{index}{A \code{fastqindexr_index} object from \code{\link[=create_index]{create_index()}}.}
 
-\item{ids}{Numeric vector of record IDs (positive whole numbers). Values are
-coerced via \code{\link[=as.numeric]{as.numeric()}}; \code{NA} and values outside \code{1} … \code{n_records} are
-errors.}
+\item{seq_idx}{Numeric vector of record IDs (positive whole numbers). Values
+are coerced via \code{\link[=as.numeric]{as.numeric()}}; \code{NA} and values outside \code{1} … \code{n_records}
+are errors.}
 
 \item{file}{Optional character vector of file paths overriding those
 stored in
@@ -43,7 +43,7 @@ con <- gzfile(path, "wt")
 writeLines(c("@r1", "ACGT", "+", "!!!!", "@r2", "TTAA", "+", "####"), con)
 close(con)
 idx <- create_index(path, type = "fastq")
-extract_sequences(idx, ids = c(2, 2, 1))
+extract_sequences(idx, seq_idx = c(2, 2, 1))
 unlink(path)
 
 }

@@ -57,7 +57,7 @@ validate_input_files <- function(files) {
 #' writeLines(c(">s1", "AA", ">s2", "CC", ">s3", "GG"), con)
 #' close(con)
 #' idx <- create_index(path, type = "fasta")
-#' extract_sequences(idx, ids = c(3, 1))
+#' extract_sequences(idx, seq_idx = c(3, 1))
 #' unlink(path)
 #'
 #' @export

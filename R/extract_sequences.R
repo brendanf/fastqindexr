@@ -28,9 +28,9 @@ validate_index <- function(index) {
 #' the index was built (see [create_index()]).
 #'
 #' @param index A `fastqindexr_index` object from [create_index()].
-#' @param ids Numeric vector of record IDs (positive whole numbers). Values are
-#'   coerced via [as.numeric()]; `NA` and values outside `1` … `n_records` are
-#'   errors.
+#' @param seq_idx Numeric vector of record IDs (positive whole numbers). Values
+#'   are coerced via [as.numeric()]; `NA` and values outside `1` … `n_records`
+#    are errors.
 #' @param file Optional character vector of file paths overriding those
 #'   stored in
 #'   `index$files`. Must be the same length as `index$files` when provided; each
@@ -55,14 +55,14 @@ validate_index <- function(index) {
 #' writeLines(c("@r1", "ACGT", "+", "!!!!", "@r2", "TTAA", "+", "####"), con)
 #' close(con)
 #' idx <- create_index(path, type = "fastq")
-#' extract_sequences(idx, ids = c(2, 2, 1))
+#' extract_sequences(idx, seq_idx = c(2, 2, 1))
 #' unlink(path)
 #'
 #' @export
-extract_sequences <- function(index, ids, file = NULL) {
+extract_sequences <- function(index, seq_idx, file = NULL) {
   index <- validate_index(index)
 
-  if (length(ids) < 1L) {
+  if (length(seq_idx) < 1L) {
     if (identical(index$format, "fastq")) {
       return(data.frame(
         seq_id = character(),
@@ -78,17 +78,20 @@ extract_sequences <- function(index, ids, file = NULL) {
     ))
   }
 
-  if (!is.numeric(ids)) {
-    stop("`ids` must be numeric/integer-like.", call. = FALSE)
+  if (!is.numeric(seq_idx)) {
+    stop("`seq_idx` must be numeric/integer-like.", call. = FALSE)
   }
-  if (any(is.na(ids) | ids < 1 | ids != floor(ids))) {
-    stop("`ids` must contain positive whole numbers (1-based).", call. = FALSE)
+  if (any(is.na(seq_idx) | seq_idx < 1 | seq_idx != floor(seq_idx))) {
+    stop(
+      "`seq_idx` must contain positive whole numbers (1-based).",
+       call. = FALSE
+     )
   }
 
   n_records <- as.numeric(index$n_records)
-  if (any(ids > n_records)) {
+  if (any(seq_idx > n_records)) {
     stop(
-      sprintf("Some ids exceed available records (%s).", n_records),
+      sprintf("Some seq_idx exceed available records (%s).", n_records),
       call. = FALSE
     )
   }

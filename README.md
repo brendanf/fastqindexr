@@ -63,7 +63,7 @@ idx
 #>   records: 3
 
 # Extract by 1-based record ID, preserving request order.
-extract_sequences(idx, ids = c(3, 1, 1))
+extract_sequences(idx, seq_idx = c(3, 1, 1))
 #>   seq_id  seq qual
 #> 1  read3 GGCC $$$$
 #> 2  read1 ACGT !!!!
@@ -138,9 +138,9 @@ unlink(tmp)
 - `create_index(files, type = c("auto", "fasta", "fastq"))`
   - accepts one or many existing gzipped files
   - returns a `fastqindexr_index` object
-- `extract_sequences(index, ids, file = NULL)`
-  - `ids` are 1-based positive integer record IDs
-  - returns rows in the same order as `ids`
+- `extract_sequences(index, seq_idx, file = NULL)`
+  - `seq_idx` are 1-based positive integer record IDs
+  - returns rows in the same order as `seq_idx`
   - duplicate IDs are allowed and duplicated in output
   - for FASTQ, output includes `seq_id`, `seq`, and `qual`; for FASTA,
     it includes `seq_id` and `seq`
