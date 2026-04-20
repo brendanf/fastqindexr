@@ -40,3 +40,25 @@ test_that("extract_sequences validates ids", {
   expect_error(extract_sequences(idx, c(0, 1)), "positive whole numbers")
   expect_error(extract_sequences(idx, c(1, 99)), "exceed available records")
 })
+
+test_that("extract_sequences restores native pointer from serialized payload", {
+  path <- tempfile(fileext = ".fa.gz")
+  make_fasta_gz(path)
+  idx <- create_index(path, type = "fasta")
+
+  idx$._cache$index_ptr <- NULL
+  out <- extract_sequences(idx, c(4, 2))
+  expect_equal(out$seq_id, c("seq4", "seq2"))
+})
+
+test_that("serialized index object works after readRDS", {
+  path <- tempfile(fileext = ".fa.gz")
+  make_fasta_gz(path)
+  idx <- create_index(path, type = "fasta")
+  rds <- tempfile(fileext = ".rds")
+  saveRDS(idx, rds)
+
+  restored <- readRDS(rds)
+  out <- extract_sequences(restored, c(3, 1))
+  expect_equal(out$seq_id, c("seq3", "seq1"))
+})

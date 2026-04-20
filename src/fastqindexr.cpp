@@ -5,7 +5,7 @@
 #include "fastqindex_core/process/index/Indexer.h"
 
 #include <algorithm>
-#include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -39,8 +39,149 @@ struct IndexBundle {
   std::uint64_t n_records{0};
 };
 
-std::unordered_map<std::string, IndexBundle> g_index_registry;
-std::atomic<std::uint64_t> g_token_counter{1};
+std::uint64_t asUInt64(double value, const std::string& field) {
+  if (!std::isfinite(value) || value < 0) {
+    throw std::runtime_error("Malformed serialized index field: " + field);
+  }
+  return static_cast<std::uint64_t>(value);
+}
+
+Rcpp::List serializeIndexedFile(const IndexedFile& indexed_file) {
+  const auto& entries = indexed_file.index.entries;
+  const R_xlen_t n = static_cast<R_xlen_t>(entries.size());
+
+  Rcpp::NumericVector block_index(n);
+  Rcpp::NumericVector block_offset(n);
+  Rcpp::NumericVector starting_line(n);
+  Rcpp::NumericVector offset_next_line(n);
+  Rcpp::IntegerVector bits(n);
+  Rcpp::RawVector dictionary_blob(
+    static_cast<R_xlen_t>(entries.size() * fastqindex_core::WINDOW_SIZE)
+  );
+
+  for (R_xlen_t i = 0; i < n; ++i) {
+    const auto& entry = entries[static_cast<size_t>(i)];
+    if (entry.dictionary.size() != fastqindex_core::WINDOW_SIZE) {
+      throw std::runtime_error("Unexpected dictionary size in index entry.");
+    }
+    block_index[i] = static_cast<double>(entry.block_index);
+    block_offset[i] = static_cast<double>(entry.block_offset_in_raw_file);
+    starting_line[i] = static_cast<double>(entry.starting_line_in_entry);
+    offset_next_line[i] = static_cast<double>(entry.offset_to_next_line_start);
+    bits[i] = static_cast<int>(entry.bits);
+
+    const size_t dictionary_offset = static_cast<size_t>(i) * fastqindex_core::WINDOW_SIZE;
+    std::copy(
+      entry.dictionary.begin(),
+      entry.dictionary.end(),
+      dictionary_blob.begin() + static_cast<R_xlen_t>(dictionary_offset)
+    );
+  }
+
+  return Rcpp::List::create(
+    Rcpp::Named("block_index") = block_index,
+    Rcpp::Named("block_offset_in_raw_file") = block_offset,
+    Rcpp::Named("starting_line_in_entry") = starting_line,
+    Rcpp::Named("offset_to_next_line_start") = offset_next_line,
+    Rcpp::Named("bits") = bits,
+    Rcpp::Named("dictionary_blob") = dictionary_blob,
+    Rcpp::Named("total_lines") = static_cast<double>(indexed_file.index.total_lines),
+    Rcpp::Named("record_count") = static_cast<double>(indexed_file.record_count)
+  );
+}
+
+Rcpp::List serializeIndexBundle(const IndexBundle& bundle) {
+  Rcpp::List indexed_files(bundle.indexed_files.size());
+  for (R_xlen_t i = 0; i < indexed_files.size(); ++i) {
+    indexed_files[i] = serializeIndexedFile(bundle.indexed_files[static_cast<size_t>(i)]);
+  }
+
+  Rcpp::NumericVector record_offsets(bundle.record_offsets.size());
+  for (R_xlen_t i = 0; i < record_offsets.size(); ++i) {
+    record_offsets[i] = static_cast<double>(bundle.record_offsets[static_cast<size_t>(i)]);
+  }
+
+  return Rcpp::List::create(
+    Rcpp::Named("schema_version") = 1L,
+    Rcpp::Named("format") = bundle.format,
+    Rcpp::Named("record_size") = bundle.record_size,
+    Rcpp::Named("files") = bundle.files,
+    Rcpp::Named("record_offsets") = record_offsets,
+    Rcpp::Named("n_records") = static_cast<double>(bundle.n_records),
+    Rcpp::Named("indexed_files") = indexed_files
+  );
+}
+
+IndexedFile deserializeIndexedFile(const Rcpp::List& payload) {
+  Rcpp::NumericVector block_index = payload["block_index"];
+  Rcpp::NumericVector block_offset = payload["block_offset_in_raw_file"];
+  Rcpp::NumericVector starting_line = payload["starting_line_in_entry"];
+  Rcpp::NumericVector offset_next_line = payload["offset_to_next_line_start"];
+  Rcpp::IntegerVector bits = payload["bits"];
+  Rcpp::RawVector dictionary_blob = payload["dictionary_blob"];
+
+  const R_xlen_t n = block_offset.size();
+  if (block_index.size() != n || starting_line.size() != n || offset_next_line.size() != n || bits.size() != n) {
+    throw std::runtime_error("Malformed serialized indexed file payload.");
+  }
+  if (dictionary_blob.size() != static_cast<R_xlen_t>(n * fastqindex_core::WINDOW_SIZE)) {
+    throw std::runtime_error("Malformed dictionary blob in serialized payload.");
+  }
+
+  IndexedFile indexed_file;
+  indexed_file.index.entries.reserve(static_cast<size_t>(n));
+  for (R_xlen_t i = 0; i < n; ++i) {
+    fastqindex_core::IndexEntry entry;
+    entry.block_index = asUInt64(block_index[i], "block_index");
+    entry.block_offset_in_raw_file = asUInt64(block_offset[i], "block_offset_in_raw_file");
+    entry.starting_line_in_entry = asUInt64(starting_line[i], "starting_line_in_entry");
+    entry.offset_to_next_line_start = static_cast<std::uint32_t>(asUInt64(offset_next_line[i], "offset_to_next_line_start"));
+    entry.bits = static_cast<unsigned char>(bits[i]);
+
+    const size_t dictionary_offset = static_cast<size_t>(i) * fastqindex_core::WINDOW_SIZE;
+    entry.dictionary.resize(fastqindex_core::WINDOW_SIZE);
+    std::copy(
+      dictionary_blob.begin() + static_cast<R_xlen_t>(dictionary_offset),
+      dictionary_blob.begin() + static_cast<R_xlen_t>(dictionary_offset + fastqindex_core::WINDOW_SIZE),
+      entry.dictionary.begin()
+    );
+    indexed_file.index.entries.push_back(std::move(entry));
+  }
+
+  indexed_file.index.total_lines = asUInt64(Rcpp::as<double>(payload["total_lines"]), "total_lines");
+  indexed_file.record_count = asUInt64(Rcpp::as<double>(payload["record_count"]), "record_count");
+  return indexed_file;
+}
+
+IndexBundle deserializeIndexBundle(const Rcpp::List& payload) {
+  const int schema_version = Rcpp::as<int>(payload["schema_version"]);
+  if (schema_version != 1) {
+    throw std::runtime_error("Unsupported serialized index schema version.");
+  }
+
+  IndexBundle bundle;
+  bundle.format = Rcpp::as<std::string>(payload["format"]);
+  bundle.record_size = Rcpp::as<int>(payload["record_size"]);
+  bundle.n_records = asUInt64(Rcpp::as<double>(payload["n_records"]), "n_records");
+  bundle.files = Rcpp::as<std::vector<std::string>>(payload["files"]);
+
+  Rcpp::NumericVector record_offsets = payload["record_offsets"];
+  bundle.record_offsets.reserve(static_cast<size_t>(record_offsets.size()));
+  for (R_xlen_t i = 0; i < record_offsets.size(); ++i) {
+    bundle.record_offsets.push_back(asUInt64(record_offsets[i], "record_offsets"));
+  }
+
+  Rcpp::List indexed_files = payload["indexed_files"];
+  if (indexed_files.size() != static_cast<R_xlen_t>(bundle.files.size())) {
+    throw std::runtime_error("Malformed payload: file and index counts differ.");
+  }
+  bundle.indexed_files.reserve(static_cast<size_t>(indexed_files.size()));
+  for (R_xlen_t i = 0; i < indexed_files.size(); ++i) {
+    bundle.indexed_files.push_back(deserializeIndexedFile(indexed_files[i]));
+  }
+
+  return bundle;
+}
 
 bool readGzLine(gzFile stream, std::string& out) {
   out.clear();
@@ -230,12 +371,12 @@ Rcpp::List cpp_create_index(Rcpp::CharacterVector files, std::string type) {
     per_file_counts[i] = static_cast<double>(bundle.indexed_files.back().record_count);
   }
 
-  const std::string token = "idx_" + std::to_string(g_token_counter.fetch_add(1));
-  g_index_registry[token] = std::move(bundle);
+  Rcpp::XPtr<IndexBundle> index_ptr(new IndexBundle(std::move(bundle)), true);
+  Rcpp::List payload = serializeIndexBundle(*index_ptr);
 
   Rcpp::NumericVector offsets(per_file_counts.size() + 1);
   for (R_xlen_t i = 0; i < offsets.size(); ++i) {
-    offsets[i] = static_cast<double>(g_index_registry[token].record_offsets[i]);
+    offsets[i] = static_cast<double>((*index_ptr).record_offsets[static_cast<size_t>(i)]);
   }
 
   return Rcpp::List::create(
@@ -244,11 +385,24 @@ Rcpp::List cpp_create_index(Rcpp::CharacterVector files, std::string type) {
     Rcpp::Named("file_info") = fileInfoDataFrame(files),
     Rcpp::Named("file_record_counts") = per_file_counts,
     Rcpp::Named("file_record_offsets") = offsets,
-    Rcpp::Named("n_records") = static_cast<double>(g_index_registry[token].n_records),
-    Rcpp::Named("index_token") = token,
+    Rcpp::Named("n_records") = static_cast<double>((*index_ptr).n_records),
+    Rcpp::Named("index_payload") = payload,
+    Rcpp::Named("index_ptr") = index_ptr,
     Rcpp::Named("record_size") = record_size,
-    Rcpp::Named("engine") = "upstream_adapted_v1"
+    Rcpp::Named("engine") = "upstream_adapted_v2"
   );
+}
+
+// [[Rcpp::export]]
+SEXP cpp_restore_index_ptr(Rcpp::List index_payload) {
+  IndexBundle bundle = deserializeIndexBundle(index_payload);
+  Rcpp::XPtr<IndexBundle> index_ptr(new IndexBundle(std::move(bundle)), true);
+  return index_ptr;
+}
+
+// [[Rcpp::export]]
+bool cpp_index_ptr_is_valid(SEXP index_ptr) {
+  return TYPEOF(index_ptr) == EXTPTRSXP && R_ExternalPtrAddr(index_ptr) != nullptr;
 }
 
 // [[Rcpp::export]]
@@ -256,13 +410,13 @@ Rcpp::List cpp_extract_sequences(
   Rcpp::CharacterVector files,
   std::string type,
   Rcpp::NumericVector ids_zero_based,
-  std::string index_token
+  SEXP index_ptr_sexp
 ) {
-  auto it_bundle = g_index_registry.find(index_token);
-  if (it_bundle == g_index_registry.end()) {
-    throw std::runtime_error("Unknown/expired index token; recreate index.");
+  if (!cpp_index_ptr_is_valid(index_ptr_sexp)) {
+    throw std::runtime_error("Invalid index pointer; recreate from serialized payload.");
   }
-  IndexBundle& bundle = it_bundle->second;
+  Rcpp::XPtr<IndexBundle> index_ptr(index_ptr_sexp);
+  IndexBundle& bundle = *index_ptr;
   if (bundle.format != type) {
     throw std::runtime_error("Type mismatch between index and request.");
   }

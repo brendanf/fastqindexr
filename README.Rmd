@@ -129,6 +129,9 @@ unlink(tmp)
 - `create_index(files, type = c("auto", "fasta", "fastq"))`
   - accepts one or many existing gzipped files
   - returns a `fastqindexr_index` object
+  - this object can be saved to disk with `saveRDS()` and loaded in a different
+    session with `readRDS()` (or serialized/deserialized in other ways, such as
+    with the [`qs2`](https://cran.r-project.org/package=qs2) package)
 - `extract_sequences(index, seq_idx, file = NULL)`
   - `seq_idx` are 1-based positive integer record IDs
   - returns rows in the same order as `seq_idx`

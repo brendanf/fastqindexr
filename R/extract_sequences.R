@@ -8,7 +8,7 @@ validate_index <- function(index) {
     "format",
     "n_records",
     "file_record_offsets",
-    "index_token"
+    "index_payload"
   )
   missing <- setdiff(required, names(index))
   if (length(missing) > 0L) {
@@ -20,6 +20,25 @@ validate_index <- function(index) {
   }
   index
 }
+
+#' @noRd
+# nolint start: object_usage_linter
+ensure_live_index_ptr <- function(index) {
+  cache <- index$._cache
+  if (!is.environment(cache)) {
+    cache <- new.env(parent = emptyenv())
+    index$._cache <- cache
+  }
+
+  ptr <- cache$index_ptr
+  if (!isTRUE(cpp_index_ptr_is_valid(ptr))) {
+    ptr <- cpp_restore_index_ptr(index$index_payload)
+    cache$index_ptr <- ptr
+  }
+
+  list(index = index, ptr = ptr)
+}
+# nolint end
 
 #' Extract sequence records by ID from indexed gzipped FASTA or FASTQ
 #'
@@ -61,6 +80,9 @@ validate_index <- function(index) {
 #' @export
 extract_sequences <- function(index, seq_idx, file = NULL) {
   index <- validate_index(index)
+  live_index <- ensure_live_index_ptr(index)
+  index <- live_index$index
+  index_ptr <- live_index$ptr
 
   if (length(seq_idx) < 1L) {
     if (identical(index$format, "fastq")) {
@@ -112,11 +134,12 @@ extract_sequences <- function(index, seq_idx, file = NULL) {
     files
   }
 
+  # nolint nextline: object_usage_linter
   result <- cpp_extract_sequences(
     files = files,
     type = index$format,
-    ids_zero_based = as.numeric(ids - 1),
-    index_token = index$index_token
+    ids_zero_based = as.numeric(seq_idx - 1),
+    index_ptr_sexp = index_ptr
   )
 
   if (identical(index$format, "fastq")) {

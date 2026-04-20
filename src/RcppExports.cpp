@@ -22,23 +22,47 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// cpp_restore_index_ptr
+SEXP cpp_restore_index_ptr(Rcpp::List index_payload);
+RcppExport SEXP _fastqindexr_cpp_restore_index_ptr(SEXP index_payloadSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::List >::type index_payload(index_payloadSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_restore_index_ptr(index_payload));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cpp_index_ptr_is_valid
+bool cpp_index_ptr_is_valid(SEXP index_ptr);
+RcppExport SEXP _fastqindexr_cpp_index_ptr_is_valid(SEXP index_ptrSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type index_ptr(index_ptrSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_index_ptr_is_valid(index_ptr));
+    return rcpp_result_gen;
+END_RCPP
+}
 // cpp_extract_sequences
-Rcpp::List cpp_extract_sequences(Rcpp::CharacterVector files, std::string type, Rcpp::NumericVector ids_zero_based, std::string index_token);
-RcppExport SEXP _fastqindexr_cpp_extract_sequences(SEXP filesSEXP, SEXP typeSEXP, SEXP ids_zero_basedSEXP, SEXP index_tokenSEXP) {
+Rcpp::List cpp_extract_sequences(Rcpp::CharacterVector files, std::string type, Rcpp::NumericVector ids_zero_based, SEXP index_ptr_sexp);
+RcppExport SEXP _fastqindexr_cpp_extract_sequences(SEXP filesSEXP, SEXP typeSEXP, SEXP ids_zero_basedSEXP, SEXP index_ptr_sexpSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type files(filesSEXP);
     Rcpp::traits::input_parameter< std::string >::type type(typeSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type ids_zero_based(ids_zero_basedSEXP);
-    Rcpp::traits::input_parameter< std::string >::type index_token(index_tokenSEXP);
-    rcpp_result_gen = Rcpp::wrap(cpp_extract_sequences(files, type, ids_zero_based, index_token));
+    Rcpp::traits::input_parameter< SEXP >::type index_ptr_sexp(index_ptr_sexpSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_extract_sequences(files, type, ids_zero_based, index_ptr_sexp));
     return rcpp_result_gen;
 END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
     {"_fastqindexr_cpp_create_index", (DL_FUNC) &_fastqindexr_cpp_create_index, 2},
+    {"_fastqindexr_cpp_restore_index_ptr", (DL_FUNC) &_fastqindexr_cpp_restore_index_ptr, 1},
+    {"_fastqindexr_cpp_index_ptr_is_valid", (DL_FUNC) &_fastqindexr_cpp_index_ptr_is_valid, 1},
     {"_fastqindexr_cpp_extract_sequences", (DL_FUNC) &_fastqindexr_cpp_extract_sequences, 4},
     {NULL, NULL, 0}
 };

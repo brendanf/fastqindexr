@@ -41,7 +41,8 @@ boundaries.}
 \item{file_record_counts}{Records per file.}
 \item{file_info}{Data frame with \code{path}, \code{size}, and \code{mtime} at index
 time.}
-\item{index_token}{Internal handle used with \code{\link[=extract_sequences]{extract_sequences()}}.}
+\item{index_payload}{Serialized internal index payload used to restore
+native state after serialization/deserialization.}
 \item{record_size}{Lines per record (2 for FASTA, 4 for FASTQ).}
 }
 }

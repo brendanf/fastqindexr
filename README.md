@@ -92,21 +92,21 @@ system.time(
   idx <- create_index(tmp, type = "fasta")
 )
 #>    user  system elapsed 
-#>   0.008   0.000   0.009
+#>   0.010   0.001   0.010
 
 # Biostrings index creation
 system.time(
   bi_index <- Biostrings::fasta.index(tmp, seqtype = "DNA")
 )
 #>    user  system elapsed 
-#>   1.390   0.078   1.488
+#>   1.835   0.081   1.922
 
 # fastqindexr indexed extraction
 system.time({
   res_fastqindexr <- extract_sequences(idx, ids)
 })
 #>    user  system elapsed 
-#>    0.01    0.00    0.01
+#>   0.010   0.000   0.009
 
 # Biostrings indexed extraction
 system.time({
@@ -114,7 +114,7 @@ system.time({
   res_biostrings <- Biostrings::readDNAStringSet(selected)
 })
 #>    user  system elapsed 
-#>   3.628   0.055   3.709
+#>   4.282   0.062   4.352
 
 # verify that sequences and named are identical
 all.equal(
@@ -138,6 +138,10 @@ unlink(tmp)
 - `create_index(files, type = c("auto", "fasta", "fastq"))`
   - accepts one or many existing gzipped files
   - returns a `fastqindexr_index` object
+  - this object can be saved to disk with `saveRDS()` and loaded in a
+    different session with `readRDS()` (or serialized/deserialized in
+    other ways, such as with the
+    [`qs2`](https://cran.r-project.org/package=qs2) package)
 - `extract_sequences(index, seq_idx, file = NULL)`
   - `seq_idx` are 1-based positive integer record IDs
   - returns rows in the same order as `seq_idx`

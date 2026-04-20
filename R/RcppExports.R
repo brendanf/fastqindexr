@@ -5,7 +5,15 @@ cpp_create_index <- function(files, type) {
     .Call(`_fastqindexr_cpp_create_index`, files, type)
 }
 
-cpp_extract_sequences <- function(files, type, ids_zero_based, index_token) {
-    .Call(`_fastqindexr_cpp_extract_sequences`, files, type, ids_zero_based, index_token)
+cpp_restore_index_ptr <- function(index_payload) {
+    .Call(`_fastqindexr_cpp_restore_index_ptr`, index_payload)
+}
+
+cpp_index_ptr_is_valid <- function(index_ptr) {
+    .Call(`_fastqindexr_cpp_index_ptr_is_valid`, index_ptr)
+}
+
+cpp_extract_sequences <- function(files, type, ids_zero_based, index_ptr_sexp) {
+    .Call(`_fastqindexr_cpp_extract_sequences`, files, type, ids_zero_based, index_ptr_sexp)
 }
 

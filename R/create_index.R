@@ -42,7 +42,8 @@ validate_input_files <- function(files) {
 #'   \item{file_record_counts}{Records per file.}
 #'   \item{file_info}{Data frame with `path`, `size`, and `mtime` at index
 #'     time.}
-#'   \item{index_token}{Internal handle used with [extract_sequences()].}
+#'   \item{index_payload}{Serialized internal index payload used to restore
+#'     native state after serialization/deserialization.}
 #'   \item{record_size}{Lines per record (2 for FASTA, 4 for FASTQ).}
 #' }
 #'
@@ -82,6 +83,10 @@ create_index <- function(
   }
 
   index <- cpp_create_index(files = files, type = type)
+  cache <- new.env(parent = emptyenv())
+  cache$index_ptr <- index$index_ptr
+  index$index_ptr <- NULL
+  index$._cache <- cache
   class(index) <- c("fastqindexr_index", class(index))
   index
 }
