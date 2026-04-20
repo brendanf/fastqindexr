@@ -8,16 +8,6 @@ if (!requireNamespace("Biostrings", quietly = TRUE)) {
 
 set.seed(1)
 
-make_benchmark_fasta <- function(path, n = 5000, width = 80) {
-  con <- gzfile(path, "wt")
-  on.exit(close(con), add = TRUE)
-  alphabet <- c("A", "C", "G", "T")
-  for (i in seq_len(n)) {
-    seq <- paste0(sample(alphabet, width, replace = TRUE), collapse = "")
-    writeLines(c(sprintf(">seq%05d", i), seq), con = con)
-  }
-}
-
 tmp <- tempfile(fileext = ".fa.gz")
 make_benchmark_fasta(tmp, n = 10000, width = 120)
 

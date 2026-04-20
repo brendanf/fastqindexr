@@ -3,5 +3,6 @@
 S3method(print,fastqindexr_index)
 export(create_index)
 export(extract_sequences)
+export(make_benchmark_fasta)
 importFrom(Rcpp,evalCpp)
 useDynLib(fastqindexr, .registration = TRUE)

@@ -2,3 +2,6 @@
 ^renv\.lock$
 ^\.Rprofile$
 ^\.\.Rcheck$
+^README\.Rmd$
+^.*\.Rproj$
+^\.Rproj\.user$

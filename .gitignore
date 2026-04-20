@@ -3,3 +3,5 @@ renv.lock
 *.o
 *.so
 .Rprofile
+.Rproj.user
+*.Rproj
