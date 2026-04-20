@@ -10,12 +10,13 @@ Authors@R: c(
       email = "brendan.furneaux@gmail.com"
     )
   )
+Author: Brendan Furneaux [aut, cre]
+Maintainer: Brendan Furneaux <brendan.furneaux@gmail.com>
 Description: Builds in-memory indexes for gzipped FASTA and FASTQ inputs and
     extracts arbitrary subsets of records through an Rcpp backend. Multiple
     files can be indexed as a single logical concatenated source.
 License: MIT + file LICENSE
 Encoding: UTF-8
-LazyData: true
 Imports:
     Rcpp
 Suggests:

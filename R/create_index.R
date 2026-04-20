@@ -6,8 +6,9 @@ validate_input_files <- function(files) {
   files <- as.character(files)
   missing_files <- !file.exists(files)
   if (any(missing_files)) {
+    missing_paths <- paste(files[missing_files], collapse = ", ")
     stop(
-      sprintf("Missing file(s): %s", paste(files[missing_files], collapse = ", ")),
+      sprintf("Missing file(s): %s", missing_paths),
       call. = FALSE
     )
   }
@@ -21,7 +22,8 @@ validate_input_files <- function(files) {
 #' stream: record IDs follow file order (first file first, then the next, and
 #' so on).
 #'
-#' @param files Character vector of paths to existing **gzip-compressed** (`.gz`)
+#' @param files Character vector of paths to existing
+#'   **gzip-compressed** (`.gz`)
 #'   FASTA or FASTQ files. Paths are normalized to absolute paths.
 #' @param type Format of the records: `"auto"` (infer from the first non-empty
 #'   line of the first file: `>` for FASTA, `@` for FASTQ), `"fasta"`, or
@@ -59,13 +61,23 @@ validate_input_files <- function(files) {
 #' unlink(path)
 #'
 #' @export
-create_index <- function(files, type = c("auto", "fasta", "fastq"), index_stride_bytes = NULL) {
+create_index <- function(
+  files,
+  type = c("auto", "fasta", "fastq"),
+  index_stride_bytes = NULL
+) {
   type <- match.arg(type)
   files <- validate_input_files(files)
 
   if (!is.null(index_stride_bytes)) {
-    if (!is.numeric(index_stride_bytes) || length(index_stride_bytes) != 1L || is.na(index_stride_bytes)) {
-      stop("`index_stride_bytes` must be NULL or a single numeric value.", call. = FALSE)
+    is_valid_stride <- is.numeric(index_stride_bytes) &&
+      length(index_stride_bytes) == 1L &&
+      !is.na(index_stride_bytes)
+    if (!is_valid_stride) {
+      stop(
+        "`index_stride_bytes` must be NULL or a single numeric value.",
+        call. = FALSE
+      )
     }
   }
 

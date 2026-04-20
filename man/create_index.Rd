@@ -14,7 +14,8 @@ create_index(
 \method{print}{fastqindexr_index}(x, ...)
 }
 \arguments{
-\item{files}{Character vector of paths to existing \strong{gzip-compressed} (\code{.gz})
+\item{files}{Character vector of paths to existing
+\strong{gzip-compressed} (\code{.gz})
 FASTA or FASTQ files. Paths are normalized to absolute paths.}
 
 \item{type}{Format of the records: \code{"auto"} (infer from the first non-empty

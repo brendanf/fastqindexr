@@ -3,11 +3,18 @@ validate_index <- function(index) {
   if (!inherits(index, "fastqindexr_index")) {
     stop("`index` must be a fastqindexr_index object.", call. = FALSE)
   }
-  required <- c("files", "format", "n_records", "file_record_offsets", "index_token")
+  required <- c(
+    "files",
+    "format",
+    "n_records",
+    "file_record_offsets",
+    "index_token"
+  )
   missing <- setdiff(required, names(index))
   if (length(missing) > 0L) {
+    missing_fields <- paste(missing, collapse = ", ")
     stop(
-      sprintf("Malformed index object. Missing: %s", paste(missing, collapse = ", ")),
+      sprintf("Malformed index object. Missing: %s", missing_fields),
       call. = FALSE
     )
   }
@@ -24,7 +31,8 @@ validate_index <- function(index) {
 #' @param ids Numeric vector of record IDs (positive whole numbers). Values are
 #'   coerced via [as.numeric()]; `NA` and values outside `1` … `n_records` are
 #'   errors.
-#' @param file Optional character vector of file paths overriding those stored in
+#' @param file Optional character vector of file paths overriding those
+#'   stored in
 #'   `index$files`. Must be the same length as `index$files` when provided; each
 #'   path must exist. Use this when data moved after indexing.
 #'
@@ -56,9 +64,18 @@ extract_sequences <- function(index, ids, file = NULL) {
 
   if (length(ids) < 1L) {
     if (identical(index$format, "fastq")) {
-      return(data.frame(seq_id = character(), seq = character(), qual = character(), stringsAsFactors = FALSE))
+      return(data.frame(
+        seq_id = character(),
+        seq = character(),
+        qual = character(),
+        stringsAsFactors = FALSE
+      ))
     }
-    return(data.frame(seq_id = character(), seq = character(), stringsAsFactors = FALSE))
+    return(data.frame(
+      seq_id = character(),
+      seq = character(),
+      stringsAsFactors = FALSE
+    ))
   }
 
   if (!is.numeric(ids)) {
@@ -70,7 +87,10 @@ extract_sequences <- function(index, ids, file = NULL) {
 
   n_records <- as.numeric(index$n_records)
   if (any(ids > n_records)) {
-    stop(sprintf("Some ids exceed available records (%s).", n_records), call. = FALSE)
+    stop(
+      sprintf("Some ids exceed available records (%s).", n_records),
+      call. = FALSE
+    )
   }
 
   files <- if (is.null(file)) {
@@ -78,7 +98,13 @@ extract_sequences <- function(index, ids, file = NULL) {
   } else {
     files <- validate_input_files(file)
     if (length(files) != length(index$files)) {
-      stop("Override `file` must contain the same number of files as index$files.", call. = FALSE)
+      stop(
+        paste0(
+          "Override `file` must contain the same number of files as ",
+          "index$files."
+        ),
+        call. = FALSE
+      )
     }
     files
   }

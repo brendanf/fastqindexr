@@ -13,7 +13,8 @@ extract_sequences(index, ids, file = NULL)
 coerced via \code{\link[=as.numeric]{as.numeric()}}; \code{NA} and values outside \code{1} … \code{n_records} are
 errors.}
 
-\item{file}{Optional character vector of file paths overriding those stored in
+\item{file}{Optional character vector of file paths overriding those
+stored in
 \code{index$files}. Must be the same length as \code{index$files} when provided; each
 path must exist. Use this when data moved after indexing.}
 }
