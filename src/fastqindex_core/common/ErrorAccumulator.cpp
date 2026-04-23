@@ -3,11 +3,15 @@
  *
  * Distributed under the MIT License (license terms are at
  * https://github.com/dkfz-odcf/FastqIndEx/blob/master/LICENSE.txt).
+ *
+ * fastqindexr: stderr logging replaced with fastqindexr_log_to_r_console()
+ * (fastqindexr_console.cpp) so this vendored TU stays free of Rcpp while
+ * satisfying R's compiled-code rules for console output.
  */
 
 #include "ErrorAccumulator.h"
 
-#include <iostream>
+#include "fastqindexr_console.h"
 
 namespace fastqindex_core {
 
@@ -26,31 +30,33 @@ bool ErrorAccumulator::verbosityIsSetToDebug() {
 void ErrorAccumulator::always(
   _cstr s0, _cstr s1, _cstr s2, _cstr s3, _cstr s4, _cstr s5, _cstr s6
 ) {
-  std::cerr << ErrorAccumulator::join(s0, s1, s2, s3, s4, s5, s6) << "\n";
+  fastqindexr_log_to_r_console(ErrorAccumulator::join(s0, s1, s2, s3, s4, s5, s6));
 }
 
 void ErrorAccumulator::debug(
   _cstr s0, _cstr s1, _cstr s2, _cstr s3, _cstr s4, _cstr s5, _cstr s6
 ) {
   if (verbosityIsSetToDebug()) {
-    std::cerr << ErrorAccumulator::join(s0, s1, s2, s3, s4, s5, s6) << "\n";
+    fastqindexr_log_to_r_console(
+      ErrorAccumulator::join(s0, s1, s2, s3, s4, s5, s6)
+    );
   }
 }
 
 void ErrorAccumulator::info(const std::string& msg) {
   if (verbosity >= 2) {
-    std::cerr << msg << "\n";
+    fastqindexr_log_to_r_console(msg);
   }
 }
 
 void ErrorAccumulator::warning(const std::string& msg) {
   if (verbosity >= 1) {
-    std::cerr << msg << "\n";
+    fastqindexr_log_to_r_console(msg);
   }
 }
 
 void ErrorAccumulator::severe(const std::string& msg) {
-  std::cerr << msg << "\n";
+  fastqindexr_log_to_r_console(msg);
 }
 
 std::vector<std::string> ErrorAccumulator::getErrorMessages() {

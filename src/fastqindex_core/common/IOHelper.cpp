@@ -3,6 +3,16 @@
  *
  * Distributed under the MIT License (license terms are at
  * https://github.com/dkfz-odcf/FastqIndEx/blob/master/LICENSE.txt).
+ *
+ * fastqindexr (R / R CMD check):
+ * - IOHelper::report: no std::cerr fallback when errorAccumulator is null
+ *   (use a non-null accumulator; null is unsupported, message dropped; see
+ *   IOHelper.h and ErrorAccumulator + fastqindexr_console.cpp for console
+ *   policy).
+ * - getApplicationPath: readlink(2) return value is checked, buffer is
+ *   null-terminated, and failed reads return an empty path. This avoids
+ *   GCC -Wunused-result, which R CMD check surfaces as a significant
+ *   install-time WARNING on typical Linux toolchains.
  */
 
 #include "IOHelper.h"
@@ -21,9 +31,8 @@ recursive_mutex IOHelper::iohelper_mtx;
 void IOHelper::report(const stringstream& sstream, ErrorAccumulator* errorAccumulator) {
   if (errorAccumulator != nullptr) {
     errorAccumulator->addErrorMessage(sstream.str());
-  } else {
-    cerr << sstream.str() << "\n";
   }
+  // fastqindexr: null accumulator — intentionally silent; see file header.
 }
 
 path IOHelper::getUserHomeDirectory() {
@@ -125,13 +134,21 @@ path IOHelper::fullPath(const path& file) {
   return path(string(buf));
 }
 
+// readlink is annotated warn_unused_result on glibc; ignoring it made
+// R CMD check fail the install step. We cap the read with sizeof(buf)-1,
+// write an explicit NUL after n bytes, and return {} when readlink fails.
 path IOHelper::getApplicationPath() {
   char buf[32768]{0};
+  ssize_t n = -1;
   if (exists("/proc")) {
-    readlink("/proc/self/exe", buf, 32768);
+    n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
   } else if (exists("/user")) {
-    readlink("/user/self/exe", buf, 32768);
+    n = readlink("/user/self/exe", buf, sizeof(buf) - 1);
   }
+  if (n <= 0) {
+    return path();
+  }
+  buf[static_cast<size_t>(n)] = '\0';
   return path(string(buf));
 }
 

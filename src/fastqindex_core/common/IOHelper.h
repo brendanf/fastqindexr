@@ -22,6 +22,10 @@ using namespace std::filesystem;
 
 namespace fastqindex_core {
 
+/**
+ * fastqindexr: For report() and the check* helpers, pass a non-null
+ * ErrorAccumulator; a null pointer drops messages (no stderr fallback).
+ */
 class IOHelper {
 
 private:
