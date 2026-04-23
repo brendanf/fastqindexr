@@ -1,1 +1,2 @@
+PKG_CXXFLAGS = -I./fastqindex_core
 PKG_LIBS = -lz

@@ -2,6 +2,9 @@ This directory holds vendored/adapted FastqIndEx core C++ sources.
 
 Source project: https://github.com/DKFZ-ODCF/FastqIndEx (MIT License)
 
+The same tree now contains both in-memory indexing/extraction adaptations and
+the vendored `.fqi` reader subset (no separate second source tree).
+
 **Layout:** Paths and filenames mirror the upstream `src/` tree: `common/`, `process/base/`,
 `process/index/`, `process/extract/`, etc., rooted here as `src/fastqindex_core/...` (not
 `src/src/...`). The R package adds `fastqindex_core_bridge.cpp` beside this folder; it
@@ -15,11 +18,27 @@ When copying or refreshing upstream files:
 
 Current adapted files:
 - `common/CommonStructsAndConstants.h`
+- `common/ErrorAccumulator.h`
+- `common/ErrorAccumulator.cpp`
+- `common/IOHelper.h`
+- `common/IOHelper.cpp`
 - `process/base/IndexEntry.h`
+- `process/base/BaseIndexEntry.h`
+- `process/base/IndexEntryV1.h`
+- `process/base/IndexHeader.h`
 - `process/base/ZLibBasedFASTQProcessorBaseClass.h`
 - `process/base/ZLibBasedFASTQProcessorBaseClass.cpp`
+- `process/io/IOBase.h`
+- `process/io/Source.h`
+- `process/io/FileSource.h`
+- `process/io/FileSource.cpp`
+- `process/io/locks/LockHandler.h`
+- `process/io/locks/FileLockHandler.h`
+- `process/io/locks/FileLockHandler.cpp`
 - `process/index/Indexer.h`
 - `process/index/Indexer.cpp`
+- `process/extract/IndexReader.h`
+- `process/extract/IndexReader.cpp`
 - `process/extract/Extractor.h`
 - `process/extract/Extractor.cpp`
 

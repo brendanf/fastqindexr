@@ -5,6 +5,10 @@ cpp_create_index <- function(files, type) {
     .Call(`_fastqindexr_cpp_create_index`, files, type)
 }
 
+cpp_read_fqi_index <- function(fqi_files, files, type) {
+    .Call(`_fastqindexr_cpp_read_fqi_index`, fqi_files, files, type)
+}
+
 cpp_restore_index_ptr <- function(index_payload) {
     .Call(`_fastqindexr_cpp_restore_index_ptr`, index_payload)
 }

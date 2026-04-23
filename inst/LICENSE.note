@@ -32,6 +32,25 @@ Current adaptation scope:
 - Local gzip FASTA/FASTQ indexing and extraction behavior shaped after the
   FastqIndEx indexing/extraction model.
 - R/Rcpp-facing API designed for in-memory index handling.
+- Additional vendored upstream-style `.fqi` reader stack merged into
+  `src/fastqindex_core/` (used to import FastqIndEx CLI index files into
+  package-native structures):
+  - src/fastqindex_core/common/ErrorAccumulator.h
+  - src/fastqindex_core/common/ErrorAccumulator.cpp
+  - src/fastqindex_core/common/IOHelper.h
+  - src/fastqindex_core/common/IOHelper.cpp
+  - src/fastqindex_core/process/base/BaseIndexEntry.h
+  - src/fastqindex_core/process/base/IndexEntryV1.h
+  - src/fastqindex_core/process/base/IndexHeader.h
+  - src/fastqindex_core/process/extract/IndexReader.h
+  - src/fastqindex_core/process/extract/IndexReader.cpp
+  - src/fastqindex_core/process/io/IOBase.h
+  - src/fastqindex_core/process/io/Source.h
+  - src/fastqindex_core/process/io/FileSource.h
+  - src/fastqindex_core/process/io/FileSource.cpp
+  - src/fastqindex_core/process/io/locks/LockHandler.h
+  - src/fastqindex_core/process/io/locks/FileLockHandler.h
+  - src/fastqindex_core/process/io/locks/FileLockHandler.cpp
 
 Annotated local changes in adapted core:
 - fastqindexr change: Replace FastqIndEx Source/Sink abstractions with

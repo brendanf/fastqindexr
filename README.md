@@ -92,21 +92,21 @@ system.time(
   idx <- create_index(tmp, type = "fasta")
 )
 #>    user  system elapsed 
-#>   0.010   0.001   0.010
+#>   0.045   0.000   0.045
 
 # Biostrings index creation
 system.time(
   bi_index <- Biostrings::fasta.index(tmp, seqtype = "DNA")
 )
 #>    user  system elapsed 
-#>   1.835   0.081   1.922
+#>   1.710   0.067   1.787
 
 # fastqindexr indexed extraction
 system.time({
   res_fastqindexr <- extract_sequences(idx, ids)
 })
 #>    user  system elapsed 
-#>   0.010   0.000   0.009
+#>   0.027   0.000   0.027
 
 # Biostrings indexed extraction
 system.time({
@@ -114,7 +114,7 @@ system.time({
   res_biostrings <- Biostrings::readDNAStringSet(selected)
 })
 #>    user  system elapsed 
-#>   4.282   0.062   4.352
+#>   3.833   0.052   3.892
 
 # verify that sequences and named are identical
 all.equal(

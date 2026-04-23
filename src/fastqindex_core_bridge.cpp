@@ -1,3 +1,8 @@
 #include "fastqindex_core/process/base/ZLibBasedFASTQProcessorBaseClass.cpp"
+#include "fastqindex_core/common/ErrorAccumulator.cpp"
+#include "fastqindex_core/common/IOHelper.cpp"
+#include "fastqindex_core/process/io/locks/FileLockHandler.cpp"
+#include "fastqindex_core/process/io/FileSource.cpp"
 #include "fastqindex_core/process/index/Indexer.cpp"
+#include "fastqindex_core/process/extract/IndexReader.cpp"
 #include "fastqindex_core/process/extract/Extractor.cpp"

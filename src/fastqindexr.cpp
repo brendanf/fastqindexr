@@ -2,17 +2,27 @@
 #include <zlib.h>
 
 #include "fastqindex_core/process/extract/Extractor.h"
+#include "fastqindex_core/process/extract/IndexReader.h"
 #include "fastqindex_core/process/index/Indexer.h"
+#include "fastqindex_core/process/io/FileSource.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <iterator>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#ifdef WINDOW_SIZE
+#undef WINDOW_SIZE
+#endif
 
 namespace {
 
@@ -252,6 +262,42 @@ Rcpp::DataFrame fileInfoDataFrame(const Rcpp::CharacterVector& files) {
   );
 }
 
+IndexedFile readSingleFqi(const std::string& fqi_file) {
+  auto source = fastqindex_core::FileSource::from(std::filesystem::path(fqi_file));
+  fastqindex_core::IndexReader reader(source);
+  std::vector<std::shared_ptr<fastqindex_core::IndexEntry>> upstream_entries =
+    reader.readIndexFile();
+  if (upstream_entries.empty()) {
+    const auto errors = reader.getErrorMessages();
+    std::string suffix = errors.empty() ? "" : (" (" + errors.front() + ")");
+    throw std::runtime_error("Failed to parse .fqi index: " + fqi_file + suffix);
+  }
+
+  IndexedFile indexed_file;
+  indexed_file.index.entries.reserve(upstream_entries.size());
+  for (const auto& upstream_entry : upstream_entries) {
+    indexed_file.index.entries.push_back(*upstream_entry);
+  }
+  indexed_file.index.total_lines = static_cast<std::uint64_t>(
+    reader.getIndexHeader().linesInIndexedFile
+  );
+  return indexed_file;
+}
+
+std::uint64_t countGzLines(const std::string& path) {
+  gzFile stream = gzopen(path.c_str(), "rb");
+  if (stream == nullptr) {
+    throw std::runtime_error("Could not open gzipped input: " + path);
+  }
+  std::uint64_t total_lines = 0;
+  std::string line;
+  while (readGzLine(stream, line)) {
+    total_lines++;
+  }
+  gzclose(stream);
+  return total_lines;
+}
+
 std::vector<std::pair<std::uint64_t, std::uint64_t>> denseRegions(std::vector<std::uint64_t> ids) {
   std::vector<std::pair<std::uint64_t, std::uint64_t>> regions;
   if (ids.empty()) {
@@ -390,6 +436,79 @@ Rcpp::List cpp_create_index(Rcpp::CharacterVector files, std::string type) {
     Rcpp::Named("index_ptr") = index_ptr,
     Rcpp::Named("record_size") = record_size,
     Rcpp::Named("engine") = "upstream_adapted_v2"
+  );
+}
+
+// [[Rcpp::export]]
+Rcpp::List cpp_read_fqi_index(
+  Rcpp::CharacterVector fqi_files,
+  Rcpp::CharacterVector files,
+  std::string type
+) {
+  if (fqi_files.size() < 1) {
+    throw std::runtime_error("`fqi_files` must contain at least one path.");
+  }
+  if (files.size() != fqi_files.size()) {
+    throw std::runtime_error("`files` must have the same length as `fqi_files`.");
+  }
+
+  std::vector<std::string> fqi_paths(fqi_files.size());
+  std::vector<std::string> data_paths(files.size());
+  for (R_xlen_t i = 0; i < fqi_files.size(); ++i) {
+    fqi_paths[i] = Rcpp::as<std::string>(fqi_files[i]);
+    data_paths[i] = Rcpp::as<std::string>(files[i]);
+  }
+
+  if (type != "fasta" && type != "fastq") {
+    throw std::runtime_error("`type` must resolve to 'fasta' or 'fastq'.");
+  }
+  const int record_size = (type == "fastq") ? 4 : 2;
+
+  IndexBundle bundle;
+  bundle.format = type;
+  bundle.record_size = record_size;
+  bundle.files = data_paths;
+  bundle.record_offsets.push_back(0);
+
+  Rcpp::NumericVector per_file_counts(data_paths.size());
+  for (size_t i = 0; i < fqi_paths.size(); ++i) {
+    IndexedFile idxf = readSingleFqi(fqi_paths[i]);
+    if (idxf.index.total_lines == 0 && std::filesystem::exists(data_paths[i])) {
+      idxf.index.total_lines = countGzLines(data_paths[i]);
+    }
+    if (idxf.index.total_lines > 0 &&
+        idxf.index.total_lines % static_cast<std::uint64_t>(record_size) != 0) {
+      throw std::runtime_error(
+        "Indexed line count is not a multiple of record size for: " + fqi_paths[i]
+      );
+    }
+    idxf.record_count = idxf.index.total_lines / static_cast<std::uint64_t>(record_size);
+    bundle.indexed_files.push_back(std::move(idxf));
+    bundle.n_records += bundle.indexed_files.back().record_count;
+    bundle.record_offsets.push_back(bundle.n_records);
+    per_file_counts[i] = static_cast<double>(bundle.indexed_files.back().record_count);
+  }
+
+  Rcpp::XPtr<IndexBundle> index_ptr(new IndexBundle(std::move(bundle)), true);
+  Rcpp::List payload = serializeIndexBundle(*index_ptr);
+
+  Rcpp::NumericVector offsets(per_file_counts.size() + 1);
+  for (R_xlen_t i = 0; i < offsets.size(); ++i) {
+    offsets[i] = static_cast<double>((*index_ptr).record_offsets[static_cast<size_t>(i)]);
+  }
+
+  return Rcpp::List::create(
+    Rcpp::Named("format") = type,
+    Rcpp::Named("files") = files,
+    Rcpp::Named("fqi_files") = fqi_files,
+    Rcpp::Named("file_info") = fileInfoDataFrame(files),
+    Rcpp::Named("file_record_counts") = per_file_counts,
+    Rcpp::Named("file_record_offsets") = offsets,
+    Rcpp::Named("n_records") = static_cast<double>((*index_ptr).n_records),
+    Rcpp::Named("index_payload") = payload,
+    Rcpp::Named("index_ptr") = index_ptr,
+    Rcpp::Named("record_size") = record_size,
+    Rcpp::Named("engine") = "upstream_cli_fqi_v1"
   );
 }
 

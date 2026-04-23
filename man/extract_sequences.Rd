@@ -7,16 +7,17 @@
 extract_sequences(index, seq_idx, file = NULL)
 }
 \arguments{
-\item{index}{A \code{fastqindexr_index} object from \code{\link[=create_index]{create_index()}}.}
+\item{index}{Either a \code{fastqindexr_index} object (from \code{\link[=create_index]{create_index()}} or
+\code{\link[=read_fqi_index]{read_fqi_index()}}) or one or more \code{.fqi} file paths.}
 
 \item{seq_idx}{Numeric vector of record IDs (positive whole numbers). Values
-are coerced via \code{\link[=as.numeric]{as.numeric()}}; \code{NA} and values outside \code{1} … \code{n_records}
-are errors.}
+are coerced via \code{\link[=as.numeric]{as.numeric()}}; \code{NA} and values outside \code{1} … \code{n_records}}
 
 \item{file}{Optional character vector of file paths overriding those
-stored in
-\code{index$files}. Must be the same length as \code{index$files} when provided; each
-path must exist. Use this when data moved after indexing.}
+stored in \code{index$files} for object input.
+For \code{.fqi} path input, this provides indexed gz file path(s) passed to
+\code{\link[=read_fqi_index]{read_fqi_index()}}. If omitted for \code{.fqi} input, file paths are deduced from
+the \code{.fqi} names.}
 }
 \value{
 A data frame:

@@ -22,6 +22,21 @@ validate_index <- function(index) {
 }
 
 #' @noRd
+resolve_extract_index <- function(index, file) {
+  if (inherits(index, "fastqindexr_index")) {
+    return(list(index = index, file = file))
+  }
+  if (is.character(index)) {
+    loaded <- read_fqi_index(fqi_path = index, files = file, type = "auto")
+    return(list(index = loaded, file = NULL))
+  }
+  stop(
+    "`index` must be a fastqindexr_index object or path(s) to `.fqi` file(s).",
+    call. = FALSE
+  )
+}
+
+#' @noRd
 # nolint start: object_usage_linter
 ensure_live_index_ptr <- function(index) {
   cache <- index$._cache
@@ -46,14 +61,16 @@ ensure_live_index_ptr <- function(index) {
 #' **1-based** record indices in the logical concatenated stream defined when
 #' the index was built (see [create_index()]).
 #'
-#' @param index A `fastqindexr_index` object from [create_index()].
+#' @param index Either a `fastqindexr_index` object (from [create_index()] or
+#'   [read_fqi_index()]) or one or more `.fqi` file paths.
 #' @param seq_idx Numeric vector of record IDs (positive whole numbers). Values
 #'   are coerced via [as.numeric()]; `NA` and values outside `1` … `n_records`
 #    are errors.
 #' @param file Optional character vector of file paths overriding those
-#'   stored in
-#'   `index$files`. Must be the same length as `index$files` when provided; each
-#'   path must exist. Use this when data moved after indexing.
+#'   stored in `index$files` for object input.
+#'   For `.fqi` path input, this provides indexed gz file path(s) passed to
+#'   [read_fqi_index()]. If omitted for `.fqi` input, file paths are deduced from
+#'   the `.fqi` names.
 #'
 #' @return A data frame:
 #' \describe{
@@ -79,6 +96,9 @@ ensure_live_index_ptr <- function(index) {
 #'
 #' @export
 extract_sequences <- function(index, seq_idx, file = NULL) {
+  resolved <- resolve_extract_index(index, file)
+  index <- resolved$index
+  file <- resolved$file
   index <- validate_index(index)
   live_index <- ensure_live_index_ptr(index)
   index <- live_index$index

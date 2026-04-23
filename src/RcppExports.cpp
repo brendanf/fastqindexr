@@ -22,6 +22,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// cpp_read_fqi_index
+Rcpp::List cpp_read_fqi_index(Rcpp::CharacterVector fqi_files, Rcpp::CharacterVector files, std::string type);
+RcppExport SEXP _fastqindexr_cpp_read_fqi_index(SEXP fqi_filesSEXP, SEXP filesSEXP, SEXP typeSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type fqi_files(fqi_filesSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type files(filesSEXP);
+    Rcpp::traits::input_parameter< std::string >::type type(typeSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_read_fqi_index(fqi_files, files, type));
+    return rcpp_result_gen;
+END_RCPP
+}
 // cpp_restore_index_ptr
 SEXP cpp_restore_index_ptr(Rcpp::List index_payload);
 RcppExport SEXP _fastqindexr_cpp_restore_index_ptr(SEXP index_payloadSEXP) {
@@ -61,6 +74,7 @@ END_RCPP
 
 static const R_CallMethodDef CallEntries[] = {
     {"_fastqindexr_cpp_create_index", (DL_FUNC) &_fastqindexr_cpp_create_index, 2},
+    {"_fastqindexr_cpp_read_fqi_index", (DL_FUNC) &_fastqindexr_cpp_read_fqi_index, 3},
     {"_fastqindexr_cpp_restore_index_ptr", (DL_FUNC) &_fastqindexr_cpp_restore_index_ptr, 1},
     {"_fastqindexr_cpp_index_ptr_is_valid", (DL_FUNC) &_fastqindexr_cpp_index_ptr_is_valid, 1},
     {"_fastqindexr_cpp_extract_sequences", (DL_FUNC) &_fastqindexr_cpp_extract_sequences, 4},
