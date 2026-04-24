@@ -360,13 +360,13 @@ std::uint64_t countGzLines(const std::string& path) {
   return total_lines;
 }
 
-std::vector<std::pair<std::uint64_t, std::uint64_t>> denseRegions(std::vector<std::uint64_t> ids) {
+std::vector<std::pair<std::uint64_t, std::uint64_t>> buildDenseRegionsFromSortedUnique(
+  const std::vector<std::uint64_t>& ids
+) {
   std::vector<std::pair<std::uint64_t, std::uint64_t>> regions;
   if (ids.empty()) {
     return regions;
   }
-  std::sort(ids.begin(), ids.end());
-  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
   std::uint64_t start = ids[0];
   std::uint64_t last = ids[0];
   for (size_t i = 1; i < ids.size(); ++i) {
@@ -380,6 +380,15 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> denseRegions(std::vector<st
   }
   regions.emplace_back(start, last);
   return regions;
+}
+
+std::vector<std::pair<std::uint64_t, std::uint64_t>> denseRegions(std::vector<std::uint64_t> ids) {
+  if (ids.empty()) {
+    return {};
+  }
+  std::sort(ids.begin(), ids.end());
+  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+  return buildDenseRegionsFromSortedUnique(ids);
 }
 
 ParsedRecord parseRecordFromFixedLines(
@@ -457,6 +466,16 @@ std::vector<std::uint64_t> parseRequestedIds(const Rcpp::NumericVector& ids_zero
   return requested;
 }
 
+bool requestIsSortedUnique(const std::vector<std::uint64_t>& requested) {
+  if (requested.size() <= 1) {
+    return true;
+  }
+  if (!std::is_sorted(requested.begin(), requested.end())) {
+    return false;
+  }
+  return std::adjacent_find(requested.begin(), requested.end()) == requested.end();
+}
+
 SelectedRecordMap collectRequestedRecords(
   const Rcpp::CharacterVector& files,
   const IndexBundle& bundle,
@@ -464,6 +483,7 @@ SelectedRecordMap collectRequestedRecords(
   bool include_qual
 ) {
   const bool need_qual = (bundle.format == "fastq" && include_qual);
+  const bool sorted_unique = requestIsSortedUnique(requested);
   SelectedRecordMap selected_global;
   selected_global.reserve(requested.size());
 
@@ -483,12 +503,14 @@ SelectedRecordMap collectRequestedRecords(
 
   fastqindex_core::Extractor extractor;
   for (size_t file_idx = 0; file_idx < local_ids_by_file.size(); ++file_idx) {
-    auto local_ids = local_ids_by_file[file_idx];
+    std::vector<std::uint64_t> local_ids = local_ids_by_file[file_idx];
     if (local_ids.empty()) {
       continue;
     }
-    std::sort(local_ids.begin(), local_ids.end());
-    local_ids.erase(std::unique(local_ids.begin(), local_ids.end()), local_ids.end());
+    if (!sorted_unique) {
+      std::sort(local_ids.begin(), local_ids.end());
+      local_ids.erase(std::unique(local_ids.begin(), local_ids.end()), local_ids.end());
+    }
     std::unordered_set<std::uint64_t> requested_set(local_ids.begin(), local_ids.end());
     auto regions = denseRegions(local_ids);
     for (const auto& rg : regions) {
@@ -557,6 +579,183 @@ std::string renderRecord(const ParsedRecord& record, const std::string& output_t
     return "@" + record.id + "\n" + record.seq + "\n+\n" + record.qual + "\n";
   }
   return ">" + record.id + "\n" + record.seq + "\n";
+}
+
+std::unique_ptr<OutputWriter> makeOutputWriter(
+  const std::string& path,
+  bool append,
+  bool compress
+) {
+  if (compress) {
+    return std::make_unique<GzipOutputWriter>(path, append);
+  }
+  return std::make_unique<PlainOutputWriter>(path, append);
+}
+
+std::uint64_t sequentialFallbackStreamToFile(
+  const std::string& file,
+  const std::string& type,
+  const std::unordered_set<std::uint64_t>& requested_local_ids,
+  bool need_qual,
+  const std::string& output_type,
+  OutputWriter* writer
+) {
+  std::uint64_t count = 0;
+  gzFile stream = gzopen(file.c_str(), "rb");
+  if (stream == nullptr) {
+    throw std::runtime_error("Fallback stream could not open file: " + file);
+  }
+
+  std::uint64_t local_id = 0;
+  std::string a;
+  std::string b;
+  std::string c;
+  std::string d;
+
+  if (type == "fastq") {
+    while (readGzLine(stream, a)) {
+      if (!readGzLine(stream, b) || !readGzLine(stream, c) || !readGzLine(stream, d)) {
+        break;
+      }
+      if (requested_local_ids.find(local_id) != requested_local_ids.end()) {
+        const std::string& q = need_qual ? d : "";
+        const ParsedRecord rec{trimPrefix(a, '@'), b, q};
+        writer->write(renderRecord(rec, output_type));
+        count++;
+      }
+      local_id++;
+    }
+  } else {
+    while (readGzLine(stream, a)) {
+      if (!readGzLine(stream, b)) {
+        break;
+      }
+      if (requested_local_ids.find(local_id) != requested_local_ids.end()) {
+        const ParsedRecord rec{trimPrefix(a, '>'), b, ""};
+        writer->write(renderRecord(rec, output_type));
+        count++;
+      }
+      local_id++;
+    }
+  }
+
+  gzclose(stream);
+  return count;
+}
+
+double fullCollectAndRewriteToFile(
+  Rcpp::CharacterVector files,
+  const IndexBundle& bundle,
+  const std::vector<std::uint64_t>& requested,
+  const std::string& resolved_output_type,
+  const std::string& outfile,
+  bool compress
+) {
+  const bool include_qual = (resolved_output_type == "fastq");
+  const SelectedRecordMap selected_global = collectRequestedRecords(
+    files, bundle, requested, include_qual
+  );
+  std::unique_ptr<OutputWriter> writer = makeOutputWriter(outfile, false, compress);
+  std::uint64_t written = 0;
+  for (auto gid : requested) {
+    auto it = selected_global.find(gid);
+    if (it == selected_global.end()) {
+      throw std::runtime_error("Could not resolve all requested ids with provided index/files.");
+    }
+    writer->write(renderRecord(it->second, resolved_output_type));
+    written++;
+  }
+  return static_cast<double>(written);
+}
+
+double streamSortedUniqueToFile(
+  Rcpp::CharacterVector files,
+  const IndexBundle& bundle,
+  const std::vector<std::uint64_t>& requested,
+  const std::string& resolved_output_type,
+  const std::string& outfile,
+  bool compress
+) {
+  const bool include_qual = (resolved_output_type == "fastq");
+  const bool need_qual = (bundle.format == "fastq" && include_qual);
+  std::uint64_t n_written = 0;
+  std::unique_ptr<OutputWriter> writer = makeOutputWriter(outfile, false, compress);
+
+  std::vector<std::vector<std::uint64_t>> local_ids_by_file(bundle.files.size());
+  for (auto gid : requested) {
+    auto up = std::upper_bound(bundle.record_offsets.begin(), bundle.record_offsets.end(), gid);
+    if (up == bundle.record_offsets.begin() || up == bundle.record_offsets.end()) {
+      throw std::runtime_error("Requested id out of range for indexed files.");
+    }
+    size_t file_idx = static_cast<size_t>((up - bundle.record_offsets.begin()) - 1);
+    if (file_idx >= bundle.files.size()) {
+      file_idx = bundle.files.size() - 1;
+    }
+    std::uint64_t local_id = gid - bundle.record_offsets[file_idx];
+    local_ids_by_file[file_idx].push_back(local_id);
+  }
+
+  fastqindex_core::Extractor extractor;
+  for (size_t file_idx = 0; file_idx < local_ids_by_file.size(); ++file_idx) {
+    std::vector<std::uint64_t> local_ids = std::move(local_ids_by_file[file_idx]);
+    if (local_ids.empty()) {
+      continue;
+    }
+    const std::unordered_set<std::uint64_t> requested_set(local_ids.begin(), local_ids.end());
+    const auto regions = buildDenseRegionsFromSortedUnique(local_ids);
+    bool wrote_in_this_file = false;
+
+    for (const auto& rg : regions) {
+      const std::uint64_t region_start = rg.first;
+      const std::uint64_t region_end = rg.second;
+      const std::uint64_t line_start = region_start * static_cast<std::uint64_t>(bundle.record_size);
+      const std::uint64_t line_count =
+        (region_end - region_start + 1) * static_cast<std::uint64_t>(bundle.record_size);
+      try {
+        std::vector<std::string> lines = extractor.extract(
+          Rcpp::as<std::string>(files[file_idx]),
+          bundle.indexed_files[file_idx].index.entries,
+          line_start,
+          line_count
+        );
+        const std::size_t extracted_records =
+          lines.size() / static_cast<std::size_t>(bundle.record_size);
+        for (std::size_t r = 0; r < extracted_records; ++r) {
+          const std::uint64_t rec_local = region_start + static_cast<std::uint64_t>(r);
+          if (requested_set.find(rec_local) == requested_set.end()) {
+            continue;
+          }
+          const ParsedRecord rec = parseRecordFromFixedLines(
+            bundle.format,
+            lines,
+            r * static_cast<std::size_t>(bundle.record_size),
+            need_qual
+          );
+          writer->write(renderRecord(rec, resolved_output_type));
+          wrote_in_this_file = true;
+          n_written++;
+        }
+      } catch (...) {
+        if (!wrote_in_this_file) {
+          n_written += sequentialFallbackStreamToFile(
+            Rcpp::as<std::string>(files[file_idx]),
+            bundle.format,
+            requested_set,
+            need_qual,
+            resolved_output_type,
+            writer.get()
+          );
+        } else {
+          return fullCollectAndRewriteToFile(
+            files, bundle, requested, resolved_output_type, outfile, compress
+          );
+        }
+        break;
+      }
+    }
+  }
+
+  return static_cast<double>(n_written);
 }
 
 }  // namespace
@@ -809,6 +1008,13 @@ double cpp_extract_sequences_to_file(
   const std::string resolved_output_type = resolveOutputType(output_type, bundle.format);
   const std::vector<std::uint64_t> requested = parseRequestedIds(ids_zero_based);
   const bool need_parsed_qual = (resolved_output_type == "fastq");
+
+  if (requestIsSortedUnique(requested) && !append) {
+    return streamSortedUniqueToFile(
+      files, bundle, requested, resolved_output_type, outfile, compress
+    );
+  }
+
   const SelectedRecordMap selected_global = collectRequestedRecords(
     files, bundle, requested, need_parsed_qual
   );

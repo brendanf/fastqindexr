@@ -35,7 +35,11 @@ FASTA input cannot be emitted as FASTQ. When emitting FASTA from a FASTQ
 index, quality lines are not read from the source.}
 
 \item{append}{Logical; append to existing \code{outfile} if \code{TRUE}, otherwise
-overwrite.}
+overwrite. When \code{append} is \code{FALSE} and \code{seq_idx} is \strong{strictly
+increasing} (no duplicate IDs), extraction writes each record as it is
+read and does not build a full in-memory map of all unique records. When
+\code{append} is \code{TRUE} or the request is not strictly increasing, the
+implementation may buffer all unique records like \code{\link[=extract_sequences]{extract_sequences()}}.}
 
 \item{compress}{Logical; if \code{TRUE}, write gzip-compressed output directly via
 zlib. Defaults to \code{endsWith(tolower(outfile), ".gz")}.}

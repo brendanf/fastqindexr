@@ -64,3 +64,21 @@ test_that("extract_sequences_to_file supports .fqi and multifile paths", {
     c("@x1", "CCCC", "+", "!!!!", "@r2", "TTAA", "+", "####", "@x2", "GGGG", "+", "####")
   )
 })
+
+test_that("extract_sequences_to_file strict-increasing output matches in-memory", {
+  tmp_in <- tempfile(fileext = ".fa.gz")
+  out_stream <- tempfile(fileext = ".fa")
+  out_ref <- tempfile(fileext = ".fa")
+  on.exit(unlink(c(tmp_in, out_stream, out_ref)), add = TRUE)
+  make_benchmark_fasta(tmp_in, n = 200L, width = 30L)
+  idx <- create_index(tmp_in, type = "fasta")
+  set.seed(7L)
+  ids <- sort(sample.int(200L, 80L, replace = FALSE))
+
+  extract_sequences_to_file(idx, ids, outfile = out_stream, append = FALSE)
+
+  ex <- extract_sequences(idx, ids)
+  ref_lines <- c(rbind(paste0(">", ex$seq_id), ex$seq))
+  writeLines(ref_lines, out_ref)
+  expect_equal(readLines(out_stream, warn = FALSE), readLines(out_ref, warn = FALSE))
+})

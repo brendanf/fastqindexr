@@ -2,8 +2,14 @@
 
 ## Development
 
+- Faster extraction when `seq_idx` is **strictly increasing** (so 0-based global
+  IDs are sorted with no duplicates): skip per-file `sort` / `unique` on local
+  record indices. Unsorted or duplicate `seq_idx` uses the previous path.
 - Add `extract_sequences_to_file()` to stream extracted records directly to
-  plain-text or gzip-compressed output files.
+  plain-text or gzip-compressed output files. For **strictly increasing**
+  `seq_idx` with `append = FALSE`, file output is written as each record is
+  read (no in-memory map of all unique records). `append = TRUE` uses a
+  buffered path like in-memory extraction.
 - Extend `extract_sequences()` with `return = c("data.frame", "list", "seq")`
   for list or named-sequence output without the full `data.frame` when not
   needed.

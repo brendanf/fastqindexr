@@ -92,7 +92,7 @@ system.time(
   idx <- create_index(tmp, type = "fasta")
 )
 #>    user  system elapsed 
-#>   0.007   0.002   0.009
+#>   0.008   0.001   0.010
 
 # Biostrings index creation
 system.time(
@@ -114,7 +114,7 @@ system.time({
   res_biostrings <- Biostrings::readDNAStringSet(selected)
 })
 #>    user  system elapsed 
-#>   3.615   0.047   3.668
+#>   3.650   0.056   3.714
 
 # verify that sequences and named are identical
 all.equal(

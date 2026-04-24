@@ -257,7 +257,11 @@ extract_sequences <- function(
 #'   FASTA input cannot be emitted as FASTQ. When emitting FASTA from a FASTQ
 #'   index, quality lines are not read from the source.
 #' @param append Logical; append to existing `outfile` if `TRUE`, otherwise
-#'   overwrite.
+#'   overwrite. When `append` is `FALSE` and `seq_idx` is **strictly
+#'   increasing** (no duplicate IDs), extraction writes each record as it is
+#'   read and does not build a full in-memory map of all unique records. When
+#'   `append` is `TRUE` or the request is not strictly increasing, the
+#'   implementation may buffer all unique records like [extract_sequences()].
 #' @param compress Logical; if `TRUE`, write gzip-compressed output directly via
 #'   zlib. Defaults to `endsWith(tolower(outfile), ".gz")`.
 #'

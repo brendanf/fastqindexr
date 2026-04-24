@@ -122,3 +122,18 @@ test_that("extract_sequences empty extract respects return mode", {
   lq <- extract_sequences(fq, integer(0L), return = "list")
   expect_setequal(names(lq), c("seq_id", "seq", "qual"))
 })
+
+test_that("extraction matches for sorted unique vs same multiset permuted", {
+  tmp <- tempfile(fileext = ".fa.gz")
+  on.exit(unlink(tmp), add = TRUE)
+  make_benchmark_fasta(tmp, n = 500L, width = 40L)
+  idx <- create_index(tmp, type = "fasta")
+  k <- 200L
+  set.seed(42L)
+  ids <- sample.int(500L, k, replace = FALSE)
+  a <- extract_sequences(idx, ids)
+  b <- extract_sequences(idx, sort(ids))
+  ord <- order(ids)
+  expect_equal(b$seq_id, a$seq_id[ord])
+  expect_equal(b$seq, a$seq[ord])
+})
