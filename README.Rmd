@@ -132,12 +132,14 @@ unlink(tmp)
   - this object can be saved to disk with `saveRDS()` and loaded in a different
     session with `readRDS()` (or serialized/deserialized in other ways, such as
     with the [`qs2`](https://cran.r-project.org/package=qs2) package)
-- `extract_sequences(index, seq_idx, file = NULL)`
+- `extract_sequences(index, seq_idx, file = NULL, return = c("data.frame", "list", "seq"))`
   - `seq_idx` are 1-based positive integer record IDs
   - returns rows in the same order as `seq_idx`
   - duplicate IDs are allowed and duplicated in output
   - for FASTQ, output includes `seq_id`, `seq`, and `qual`; for FASTA, it
     includes `seq_id` and `seq`
+  - with `return = "list"`, a list with the same fields; with `return = "seq"`,
+    sequences only, named by `seq_id` (duplicates in names are allowed)
 - `extract_sequences_to_file(index, seq_idx, file = NULL, outfile, ...)`
   - streams extracted records directly to file (plain or `.gz`)
   - preserves input order and duplicate IDs exactly

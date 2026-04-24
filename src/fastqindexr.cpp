@@ -382,12 +382,20 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> denseRegions(std::vector<st
   return regions;
 }
 
-ParsedRecord parseRecordFromFixedLines(const std::string& type, const std::vector<std::string>& lines, size_t offset) {
+ParsedRecord parseRecordFromFixedLines(
+  const std::string& type,
+  const std::vector<std::string>& lines,
+  size_t offset,
+  bool include_qual
+) {
   if (type == "fastq") {
     if (offset + 3 >= lines.size()) {
       throw std::runtime_error("Malformed FASTQ lines in extracted region.");
     }
-    return ParsedRecord{trimPrefix(lines[offset], '@'), lines[offset + 1], lines[offset + 3]};
+    if (include_qual) {
+      return ParsedRecord{trimPrefix(lines[offset], '@'), lines[offset + 1], lines[offset + 3]};
+    }
+    return ParsedRecord{trimPrefix(lines[offset], '@'), lines[offset + 1], ""};
   }
   // fastqindexr change: FASTA extraction currently assumes one sequence line per record.
   if (offset + 1 >= lines.size()) {
@@ -401,7 +409,8 @@ void sequentialFallbackCollect(
   const std::string& type,
   const std::unordered_set<std::uint64_t>& requested_local_ids,
   std::uint64_t global_offset,
-  std::unordered_map<std::uint64_t, ParsedRecord>* selected_global
+  std::unordered_map<std::uint64_t, ParsedRecord>* selected_global,
+  bool include_qual
 ) {
   gzFile stream = gzopen(file.c_str(), "rb");
   if (stream == nullptr) {
@@ -420,7 +429,8 @@ void sequentialFallbackCollect(
         break;
       }
       if (requested_local_ids.find(local_id) != requested_local_ids.end()) {
-        (*selected_global)[global_offset + local_id] = ParsedRecord{trimPrefix(a, '@'), b, d};
+        const std::string& q = include_qual ? d : "";
+        (*selected_global)[global_offset + local_id] = ParsedRecord{trimPrefix(a, '@'), b, q};
       }
       local_id++;
     }
@@ -450,8 +460,10 @@ std::vector<std::uint64_t> parseRequestedIds(const Rcpp::NumericVector& ids_zero
 SelectedRecordMap collectRequestedRecords(
   const Rcpp::CharacterVector& files,
   const IndexBundle& bundle,
-  const std::vector<std::uint64_t>& requested
+  const std::vector<std::uint64_t>& requested,
+  bool include_qual
 ) {
+  const bool need_qual = (bundle.format == "fastq" && include_qual);
   SelectedRecordMap selected_global;
   selected_global.reserve(requested.size());
 
@@ -502,7 +514,8 @@ SelectedRecordMap collectRequestedRecords(
           ParsedRecord rec = parseRecordFromFixedLines(
             bundle.format,
             lines,
-            r * static_cast<std::size_t>(bundle.record_size)
+            r * static_cast<std::size_t>(bundle.record_size),
+            need_qual
           );
           std::uint64_t global_id = bundle.record_offsets[file_idx] + local_id;
           selected_global[global_id] = std::move(rec);
@@ -515,7 +528,8 @@ SelectedRecordMap collectRequestedRecords(
           bundle.format,
           requested_set,
           bundle.record_offsets[file_idx],
-          &selected_global
+          &selected_global,
+          need_qual
         );
       }
     }
@@ -697,7 +711,8 @@ Rcpp::List cpp_extract_sequences(
   Rcpp::CharacterVector files,
   std::string type,
   Rcpp::NumericVector ids_zero_based,
-  SEXP index_ptr_sexp
+  SEXP index_ptr_sexp,
+  bool include_qual
 ) {
   if (!cpp_index_ptr_is_valid(index_ptr_sexp)) {
     throw std::runtime_error("Invalid index pointer; recreate from serialized payload.");
@@ -711,21 +726,34 @@ Rcpp::List cpp_extract_sequences(
     throw std::runtime_error("Override `file` must contain same file count as index.");
   }
 
+  const bool return_qual = (bundle.format == "fastq" && include_qual);
   if (ids_zero_based.size() < 1) {
+    if (return_qual) {
+      return Rcpp::List::create(
+        Rcpp::Named("seq_id") = Rcpp::CharacterVector(),
+        Rcpp::Named("seq") = Rcpp::CharacterVector(),
+        Rcpp::Named("qual") = Rcpp::CharacterVector()
+      );
+    }
     return Rcpp::List::create(
       Rcpp::Named("seq_id") = Rcpp::CharacterVector(),
-      Rcpp::Named("seq") = Rcpp::CharacterVector(),
-      Rcpp::Named("qual") = Rcpp::CharacterVector()
+      Rcpp::Named("seq") = Rcpp::CharacterVector()
     );
   }
 
   const std::vector<std::uint64_t> requested = parseRequestedIds(ids_zero_based);
-  const SelectedRecordMap selected_global = collectRequestedRecords(files, bundle, requested);
+  const bool need_parsed_qual = (bundle.format == "fastq" && include_qual);
+  const SelectedRecordMap selected_global = collectRequestedRecords(
+    files, bundle, requested, need_parsed_qual
+  );
 
   R_xlen_t n = ids_zero_based.size();
   Rcpp::CharacterVector out_id(n);
   Rcpp::CharacterVector out_seq(n);
-  Rcpp::CharacterVector out_qual(n);
+  Rcpp::CharacterVector out_qual;
+  if (return_qual) {
+    out_qual = Rcpp::CharacterVector(n);
+  }
   for (R_xlen_t i = 0; i < n; ++i) {
     std::uint64_t gid = requested[i];
     auto it = selected_global.find(gid);
@@ -734,13 +762,21 @@ Rcpp::List cpp_extract_sequences(
     }
     out_id[i] = it->second.id;
     out_seq[i] = it->second.seq;
-    out_qual[i] = it->second.qual;
+    if (return_qual) {
+      out_qual[i] = it->second.qual;
+    }
   }
 
+  if (return_qual) {
+    return Rcpp::List::create(
+      Rcpp::Named("seq_id") = out_id,
+      Rcpp::Named("seq") = out_seq,
+      Rcpp::Named("qual") = out_qual
+    );
+  }
   return Rcpp::List::create(
     Rcpp::Named("seq_id") = out_id,
-    Rcpp::Named("seq") = out_seq,
-    Rcpp::Named("qual") = out_qual
+    Rcpp::Named("seq") = out_seq
   );
 }
 
@@ -772,7 +808,10 @@ double cpp_extract_sequences_to_file(
 
   const std::string resolved_output_type = resolveOutputType(output_type, bundle.format);
   const std::vector<std::uint64_t> requested = parseRequestedIds(ids_zero_based);
-  const SelectedRecordMap selected_global = collectRequestedRecords(files, bundle, requested);
+  const bool need_parsed_qual = (resolved_output_type == "fastq");
+  const SelectedRecordMap selected_global = collectRequestedRecords(
+    files, bundle, requested, need_parsed_qual
+  );
 
   std::unique_ptr<OutputWriter> writer;
   if (compress) {

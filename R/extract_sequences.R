@@ -57,28 +57,43 @@ ensure_live_index_ptr <- function(index) {
 
 #' Extract sequence records by ID from indexed gzipped FASTA or FASTQ
 #'
-#' Returns rows in **the same order as `ids`**, including duplicate IDs. IDs are
+#' Returns rows in **the same order as `seq_idx`**, including duplicate IDs. IDs
+#' are
 #' **1-based** record indices in the logical concatenated stream defined when
 #' the index was built (see [create_index()]).
 #'
 #' @param index Either a `fastqindexr_index` object (from [create_index()] or
 #'   [read_fqi_index()]) or one or more `.fqi` file paths.
 #' @param seq_idx Numeric vector of record IDs (positive whole numbers). Values
-#'   are coerced via [as.numeric()]; `NA` and values outside `1` … `n_records`
-#    are errors.
+#'   are coerced via [as.numeric()]; `NA` and values outside `1` &hellip; `n_records`
+#'   are errors.
 #' @param file Optional character vector of file paths overriding those
 #'   stored in `index$files` for object input.
 #'   For `.fqi` path input, this provides indexed gz file path(s) passed to
 #'   [read_fqi_index()]. If omitted for `.fqi` input, file paths are deduced from
 #'   the `.fqi` names.
+#' @param return In-memory return shape: `"data.frame"` (the default), `"list"`, or
+#'   `"seq"`. With `"data.frame"`, the result is as before. With `"list"`, returns
+#'   a list with `seq_id` and `seq` (and `qual` for FASTQ). With `"seq"`, returns
+#'   a character vector of sequences with `seq_id` as names, preserving order
+#'   and allowing duplicate names. For indexed FASTQ, `return = "seq"` skips
+#'   reading quality lines from the source.
 #'
-#' @return A data frame:
+#' @return
+#' When `return = "data.frame"` (the default), a `data.frame`:
 #' \describe{
 #'   \item{FASTA}{Columns `seq_id` and `seq`.}
 #'   \item{FASTQ}{Columns `seq_id`, `seq`, and `qual`.}
 #' }
-#' For `length(ids) == 0`, an empty data frame with the appropriate columns is
-#' returned.
+#' For `length(seq_idx) == 0`, an empty `data.frame` with the appropriate columns
+#' is returned.
+#'
+#' When `return = "list"`, a `list` with `seq_id`, `seq`, and for FASTQ also
+#' `qual` (omitted for FASTA).
+#'
+#' When `return = "seq"`, a character vector of `seq` only, with names
+#' set from `seq_id` (duplicates allowed).
+#' Empty extract requests use empty containers of the corresponding type.
 #'
 #' @section FASTA limitation:
 #' Each record must consist of a header line plus **one** sequence line.
@@ -95,7 +110,13 @@ ensure_live_index_ptr <- function(index) {
 #' unlink(path)
 #'
 #' @export
-extract_sequences <- function(index, seq_idx, file = NULL) {
+extract_sequences <- function(
+  index,
+  seq_idx,
+  file = NULL,
+  return = c("data.frame", "list", "seq")
+) {
+  return <- match.arg(return)
   resolved <- resolve_extract_index(index, file)
   index <- resolved$index
   file <- resolved$file
@@ -105,6 +126,21 @@ extract_sequences <- function(index, seq_idx, file = NULL) {
   index_ptr <- live_index$ptr
 
   if (length(seq_idx) < 1L) {
+    if (return == "list") {
+      if (identical(index$format, "fastq")) {
+        return(
+          list(
+            seq_id = character(),
+            seq = character(),
+            qual = character()
+          )
+        )
+      }
+      return(list(seq_id = character(), seq = character()))
+    }
+    if (return == "seq") {
+      return(structure(character(0L), names = character(0L)))
+    }
     if (identical(index$format, "fastq")) {
       return(data.frame(
         seq_id = character(),
@@ -154,29 +190,50 @@ extract_sequences <- function(index, seq_idx, file = NULL) {
     files
   }
 
+  is_fastq <- identical(index$format, "fastq")
+  include_qual <- is_fastq && (return %in% c("data.frame", "list"))
+
   # nolint nextline: object_usage_linter
   result <- cpp_extract_sequences(
     files = files,
     type = index$format,
     ids_zero_based = as.numeric(seq_idx - 1),
-    index_ptr_sexp = index_ptr
+    index_ptr_sexp = index_ptr,
+    include_qual = include_qual
   )
 
-  if (identical(index$format, "fastq")) {
-    out <- data.frame(
-      seq_id = as.character(result$seq_id),
-      seq = as.character(result$seq),
-      qual = as.character(result$qual),
-      stringsAsFactors = FALSE
-    )
-  } else {
-    out <- data.frame(
-      seq_id = as.character(result$seq_id),
-      seq = as.character(result$seq),
-      stringsAsFactors = FALSE
+  if (return == "data.frame") {
+    if (is_fastq) {
+      return(
+        data.frame(
+          seq_id = result$seq_id,
+          seq = result$seq,
+          qual = result$qual,
+          stringsAsFactors = FALSE
+        )
+      )
+    }
+    return(
+      data.frame(
+        seq_id = result$seq_id,
+        seq = result$seq,
+        stringsAsFactors = FALSE
+      )
     )
   }
-  out
+  if (return == "list") {
+    if (is_fastq) {
+      return(
+        list(
+          seq_id = result$seq_id,
+          seq = result$seq,
+          qual = result$qual
+        )
+      )
+    }
+    return(list(seq_id = result$seq_id, seq = result$seq))
+  }
+  stats::setNames(result$seq, result$seq_id)
 }
 
 #' Extract sequence records by ID and stream directly to file
@@ -197,7 +254,8 @@ extract_sequences <- function(index, seq_idx, file = NULL) {
 #' @param outfile Output file path.
 #' @param type Output format: `"auto"` (default), `"fasta"`, or `"fastq"`.
 #'   `"auto"` uses the indexed input format. FASTQ input can be emitted as FASTA;
-#'   FASTA input cannot be emitted as FASTQ.
+#'   FASTA input cannot be emitted as FASTQ. When emitting FASTA from a FASTQ
+#'   index, quality lines are not read from the source.
 #' @param append Logical; append to existing `outfile` if `TRUE`, otherwise
 #'   overwrite.
 #' @param compress Logical; if `TRUE`, write gzip-compressed output directly via

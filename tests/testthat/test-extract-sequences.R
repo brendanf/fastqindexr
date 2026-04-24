@@ -62,3 +62,63 @@ test_that("serialized index object works after readRDS", {
   out <- extract_sequences(restored, c(3, 1))
   expect_equal(out$seq_id, c("seq3", "seq1"))
 })
+
+test_that("extract_sequences return = list for FASTA and FASTQ", {
+  fa_path <- tempfile(fileext = ".fa.gz")
+  make_fasta_gz(fa_path)
+  fa_idx <- create_index(fa_path, type = "fasta")
+  l_fa <- extract_sequences(fa_idx, c(3, 1, 2), return = "list")
+  expect_type(l_fa, "list")
+  expect_setequal(names(l_fa), c("seq_id", "seq"))
+  expect_equal(l_fa$seq_id, c("seq3", "seq1", "seq2"))
+  expect_equal(l_fa$seq, c("GGGG", "AAAA", "CCCC"))
+
+  fq_path <- tempfile(fileext = ".fq.gz")
+  make_fastq_gz(fq_path)
+  fq_idx <- create_index(fq_path, type = "fastq")
+  l_fq <- extract_sequences(fq_idx, c(4, 2), return = "list")
+  expect_setequal(names(l_fq), c("seq_id", "seq", "qual"))
+  expect_equal(l_fq$seq_id, c("r4", "r2"))
+  expect_equal(l_fq$qual, c("%%%%", "####"))
+})
+
+test_that("extract_sequences return = seq with duplicate names and order", {
+  path <- tempfile(fileext = ".fa.gz")
+  make_fasta_gz(path)
+  idx <- create_index(path, type = "fasta")
+  s <- extract_sequences(idx, c(3, 1, 3), return = "seq")
+  expect_type(s, "character")
+  expect_equal(unname(s), c("GGGG", "AAAA", "GGGG"))
+  expect_equal(names(s), c("seq3", "seq1", "seq3"))
+})
+
+test_that("extract_sequences return = seq for FASTQ matches data.frame seq column", {
+  path <- tempfile(fileext = ".fq.gz")
+  make_fastq_gz(path)
+  idx <- create_index(path, type = "fastq")
+  ids <- c(4, 2, 1)
+  as_df <- extract_sequences(idx, ids, return = "data.frame")
+  as_seq <- extract_sequences(idx, ids, return = "seq")
+  expect_equal(unname(as_seq), as_df$seq)
+  expect_equal(names(as_seq), as_df$seq_id)
+})
+
+test_that("extract_sequences empty extract respects return mode", {
+  path <- tempfile(fileext = ".fa.gz")
+  make_fasta_gz(path)
+  fa <- create_index(path, type = "fasta")
+  expect_equal(
+    extract_sequences(fa, integer(0L), return = "data.frame"),
+    data.frame(seq_id = character(), seq = character(), stringsAsFactors = FALSE)
+  )
+  el <- extract_sequences(fa, integer(0L), return = "list")
+  expect_type(el, "list")
+  expect_setequal(names(el), c("seq_id", "seq"))
+  expect_equal(extract_sequences(fa, integer(0L), return = "seq"), setNames(character(0L), character(0L)))
+
+  fq_path <- tempfile(fileext = ".fq.gz")
+  make_fastq_gz(fq_path)
+  fq <- create_index(fq_path, type = "fastq")
+  lq <- extract_sequences(fq, integer(0L), return = "list")
+  expect_setequal(names(lq), c("seq_id", "seq", "qual"))
+})

@@ -92,21 +92,21 @@ system.time(
   idx <- create_index(tmp, type = "fasta")
 )
 #>    user  system elapsed 
-#>   0.009   0.001   0.008
+#>   0.007   0.002   0.009
 
 # Biostrings index creation
 system.time(
   bi_index <- Biostrings::fasta.index(tmp, seqtype = "DNA")
 )
 #>    user  system elapsed 
-#>   1.387   0.073   1.485
+#>   0.009   0.000   0.009
 
 # fastqindexr indexed extraction
 system.time({
   res_fastqindexr <- extract_sequences(idx, ids)
 })
 #>    user  system elapsed 
-#>    0.01    0.00    0.01
+#>   0.009   0.000   0.009
 
 # Biostrings indexed extraction
 system.time({
@@ -114,7 +114,7 @@ system.time({
   res_biostrings <- Biostrings::readDNAStringSet(selected)
 })
 #>    user  system elapsed 
-#>   3.635   0.052   3.693
+#>   3.615   0.047   3.668
 
 # verify that sequences and named are identical
 all.equal(
@@ -142,12 +142,15 @@ unlink(tmp)
     different session with `readRDS()` (or serialized/deserialized in
     other ways, such as with the
     [`qs2`](https://cran.r-project.org/package=qs2) package)
-- `extract_sequences(index, seq_idx, file = NULL)`
+- `extract_sequences(index, seq_idx, file = NULL, return = c("data.frame", "list", "seq"))`
   - `seq_idx` are 1-based positive integer record IDs
   - returns rows in the same order as `seq_idx`
   - duplicate IDs are allowed and duplicated in output
   - for FASTQ, output includes `seq_id`, `seq`, and `qual`; for FASTA,
     it includes `seq_id` and `seq`
+  - with `return = "list"`, a list with the same fields; with
+    `return = "seq"`, sequences only, named by `seq_id` (duplicates in
+    names are allowed)
 - `extract_sequences_to_file(index, seq_idx, file = NULL, outfile, ...)`
   - streams extracted records directly to file (plain or `.gz`)
   - preserves input order and duplicate IDs exactly

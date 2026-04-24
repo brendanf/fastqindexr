@@ -17,8 +17,8 @@ cpp_index_ptr_is_valid <- function(index_ptr) {
     .Call(`_fastqindexr_cpp_index_ptr_is_valid`, index_ptr)
 }
 
-cpp_extract_sequences <- function(files, type, ids_zero_based, index_ptr_sexp) {
-    .Call(`_fastqindexr_cpp_extract_sequences`, files, type, ids_zero_based, index_ptr_sexp)
+cpp_extract_sequences <- function(files, type, ids_zero_based, index_ptr_sexp, include_qual) {
+    .Call(`_fastqindexr_cpp_extract_sequences`, files, type, ids_zero_based, index_ptr_sexp, include_qual)
 }
 
 cpp_extract_sequences_to_file <- function(files, source_type, ids_zero_based, index_ptr_sexp, output_type, outfile, append, compress) {

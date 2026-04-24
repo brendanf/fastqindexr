@@ -1,7 +1,7 @@
 Package: fastqindexr
 Type: Package
 Title: Random-Access Style Extraction from Gzipped FASTA and FASTQ
-Version: 0.0.1.9000
+Version: 0.0.1.9001
 Authors@R: c(
     person(
       given = "Brendan",

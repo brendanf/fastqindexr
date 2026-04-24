@@ -31,7 +31,8 @@ input, file paths are deduced from the \code{.fqi} names.}
 
 \item{type}{Output format: \code{"auto"} (default), \code{"fasta"}, or \code{"fastq"}.
 \code{"auto"} uses the indexed input format. FASTQ input can be emitted as FASTA;
-FASTA input cannot be emitted as FASTQ.}
+FASTA input cannot be emitted as FASTQ. When emitting FASTA from a FASTQ
+index, quality lines are not read from the source.}
 
 \item{append}{Logical; append to existing \code{outfile} if \code{TRUE}, otherwise
 overwrite.}
