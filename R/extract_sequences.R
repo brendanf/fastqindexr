@@ -178,3 +178,115 @@ extract_sequences <- function(index, seq_idx, file = NULL) {
   }
   out
 }
+
+#' Extract sequence records by ID and stream directly to file
+#'
+#' Writes records in **the same order as `seq_idx`**, including duplicate IDs.
+#' IDs are **1-based** record indices in the logical concatenated stream defined
+#' when the index was built (see [create_index()]).
+#'
+#' @param index Either a `fastqindexr_index` object (from [create_index()] or
+#'   [read_fqi_index()]) or one or more `.fqi` file paths.
+#' @param seq_idx Numeric vector of record IDs (positive whole numbers). Values
+#'   are coerced via [as.numeric()]; `NA` and values outside `1` ... `n_records`
+#'   are errors.
+#' @param file Optional character vector of file paths overriding those stored
+#'   in `index$files` for object input. For `.fqi` path input, this provides
+#'   indexed gz file path(s) passed to [read_fqi_index()]. If omitted for `.fqi`
+#'   input, file paths are deduced from the `.fqi` names.
+#' @param outfile Output file path.
+#' @param type Output format: `"auto"` (default), `"fasta"`, or `"fastq"`.
+#'   `"auto"` uses the indexed input format. FASTQ input can be emitted as FASTA;
+#'   FASTA input cannot be emitted as FASTQ.
+#' @param append Logical; append to existing `outfile` if `TRUE`, otherwise
+#'   overwrite.
+#' @param compress Logical; if `TRUE`, write gzip-compressed output directly via
+#'   zlib. Defaults to `endsWith(tolower(outfile), ".gz")`.
+#'
+#' @return Invisibly returns `outfile`.
+#'
+#' @section FASTA limitation:
+#' Each record must consist of a header line plus **one** sequence line.
+#'
+#' @seealso [extract_sequences()], [create_index()]
+#'
+#' @export
+extract_sequences_to_file <- function(
+  index,
+  seq_idx,
+  file = NULL,
+  outfile,
+  type = c("auto", "fasta", "fastq"),
+  append = FALSE,
+  compress = endsWith(tolower(outfile), ".gz")
+) {
+  resolved <- resolve_extract_index(index, file)
+  index <- resolved$index
+  file <- resolved$file
+  index <- validate_index(index)
+  live_index <- ensure_live_index_ptr(index)
+  index <- live_index$index
+  index_ptr <- live_index$ptr
+
+  if (!is.character(outfile) || length(outfile) != 1L || !nzchar(outfile)) {
+    stop("`outfile` must be a non-empty character scalar.", call. = FALSE)
+  }
+  if (!is.logical(append) || length(append) != 1L || is.na(append)) {
+    stop("`append` must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.logical(compress) || length(compress) != 1L || is.na(compress)) {
+    stop("`compress` must be TRUE or FALSE.", call. = FALSE)
+  }
+
+  if (length(seq_idx) < 1L) {
+    return(invisible(normalizePath(outfile, winslash = "/", mustWork = FALSE)))
+  }
+  if (!is.numeric(seq_idx)) {
+    stop("`seq_idx` must be numeric/integer-like.", call. = FALSE)
+  }
+  if (any(is.na(seq_idx) | seq_idx < 1 | seq_idx != floor(seq_idx))) {
+    stop(
+      "`seq_idx` must contain positive whole numbers (1-based).",
+      call. = FALSE
+    )
+  }
+
+  n_records <- as.numeric(index$n_records)
+  if (any(seq_idx > n_records)) {
+    stop(
+      sprintf("Some seq_idx exceed available records (%s).", n_records),
+      call. = FALSE
+    )
+  }
+
+  files <- if (is.null(file)) {
+    as.character(index$files)
+  } else {
+    files <- validate_input_files(file)
+    if (length(files) != length(index$files)) {
+      stop(
+        paste0(
+          "Override `file` must contain the same number of files as ",
+          "index$files."
+        ),
+        call. = FALSE
+      )
+    }
+    files
+  }
+
+  type <- match.arg(type)
+  # nolint nextline: object_usage_linter
+  cpp_extract_sequences_to_file(
+    files = files,
+    source_type = index$format,
+    ids_zero_based = as.numeric(seq_idx - 1),
+    index_ptr_sexp = index_ptr,
+    output_type = type,
+    outfile = outfile,
+    append = append,
+    compress = compress
+  )
+
+  invisible(normalizePath(outfile, winslash = "/", mustWork = FALSE))
+}

@@ -71,6 +71,24 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// cpp_extract_sequences_to_file
+double cpp_extract_sequences_to_file(Rcpp::CharacterVector files, std::string source_type, Rcpp::NumericVector ids_zero_based, SEXP index_ptr_sexp, std::string output_type, std::string outfile, bool append, bool compress);
+RcppExport SEXP _fastqindexr_cpp_extract_sequences_to_file(SEXP filesSEXP, SEXP source_typeSEXP, SEXP ids_zero_basedSEXP, SEXP index_ptr_sexpSEXP, SEXP output_typeSEXP, SEXP outfileSEXP, SEXP appendSEXP, SEXP compressSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type files(filesSEXP);
+    Rcpp::traits::input_parameter< std::string >::type source_type(source_typeSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type ids_zero_based(ids_zero_basedSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type index_ptr_sexp(index_ptr_sexpSEXP);
+    Rcpp::traits::input_parameter< std::string >::type output_type(output_typeSEXP);
+    Rcpp::traits::input_parameter< std::string >::type outfile(outfileSEXP);
+    Rcpp::traits::input_parameter< bool >::type append(appendSEXP);
+    Rcpp::traits::input_parameter< bool >::type compress(compressSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_extract_sequences_to_file(files, source_type, ids_zero_based, index_ptr_sexp, output_type, outfile, append, compress));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_fastqindexr_cpp_create_index", (DL_FUNC) &_fastqindexr_cpp_create_index, 2},
@@ -78,6 +96,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastqindexr_cpp_restore_index_ptr", (DL_FUNC) &_fastqindexr_cpp_restore_index_ptr, 1},
     {"_fastqindexr_cpp_index_ptr_is_valid", (DL_FUNC) &_fastqindexr_cpp_index_ptr_is_valid, 1},
     {"_fastqindexr_cpp_extract_sequences", (DL_FUNC) &_fastqindexr_cpp_extract_sequences, 4},
+    {"_fastqindexr_cpp_extract_sequences_to_file", (DL_FUNC) &_fastqindexr_cpp_extract_sequences_to_file, 8},
     {NULL, NULL, 0}
 };
 

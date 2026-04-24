@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <memory>
 #include <stdexcept>
@@ -48,6 +49,67 @@ struct IndexBundle {
   std::vector<std::uint64_t> record_offsets;
   std::uint64_t n_records{0};
 };
+
+class OutputWriter {
+ public:
+  virtual ~OutputWriter() = default;
+  virtual void write(const std::string& chunk) = 0;
+};
+
+class PlainOutputWriter : public OutputWriter {
+ public:
+  PlainOutputWriter(const std::string& path, bool append) {
+    std::ios_base::openmode mode = std::ios::binary | std::ios::out;
+    mode |= append ? std::ios::app : std::ios::trunc;
+    stream_.open(path, mode);
+    if (!stream_.good()) {
+      throw std::runtime_error("Could not open output file for writing: " + path);
+    }
+  }
+
+  void write(const std::string& chunk) override {
+    stream_.write(chunk.data(), static_cast<std::streamsize>(chunk.size()));
+    if (!stream_.good()) {
+      throw std::runtime_error("Write failed while streaming extraction output.");
+    }
+  }
+
+ private:
+  std::ofstream stream_;
+};
+
+class GzipOutputWriter : public OutputWriter {
+ public:
+  GzipOutputWriter(const std::string& path, bool append) {
+    const char* mode = append ? "ab" : "wb";
+    stream_ = gzopen(path.c_str(), mode);
+    if (stream_ == nullptr) {
+      throw std::runtime_error("Could not open gz output stream: " + path);
+    }
+  }
+
+  ~GzipOutputWriter() override {
+    if (stream_ != nullptr) {
+      gzclose(stream_);
+    }
+  }
+
+  void write(const std::string& chunk) override {
+    const int n = static_cast<int>(chunk.size());
+    if (gzwrite(stream_, chunk.data(), n) != n) {
+      int zerr = Z_OK;
+      const char* msg = gzerror(stream_, &zerr);
+      std::string detail = (msg == nullptr) ? "unknown zlib error" : msg;
+      throw std::runtime_error("gzwrite failed while streaming extraction output: " +
+                               detail);
+    }
+  }
+
+ private:
+  gzFile stream_{nullptr};
+};
+
+using SelectedRecordMap = std::unordered_map<std::uint64_t, ParsedRecord>;
 
 std::uint64_t asUInt64(double value, const std::string& field) {
   if (!std::isfinite(value) || value < 0) {
@@ -377,6 +439,112 @@ void sequentialFallbackCollect(
   gzclose(stream);
 }
 
+std::vector<std::uint64_t> parseRequestedIds(const Rcpp::NumericVector& ids_zero_based) {
+  std::vector<std::uint64_t> requested(ids_zero_based.size());
+  for (R_xlen_t i = 0; i < ids_zero_based.size(); ++i) {
+    requested[static_cast<size_t>(i)] = static_cast<std::uint64_t>(ids_zero_based[i]);
+  }
+  return requested;
+}
+
+SelectedRecordMap collectRequestedRecords(
+  const Rcpp::CharacterVector& files,
+  const IndexBundle& bundle,
+  const std::vector<std::uint64_t>& requested
+) {
+  SelectedRecordMap selected_global;
+  selected_global.reserve(requested.size());
+
+  std::vector<std::vector<std::uint64_t>> local_ids_by_file(bundle.files.size());
+  for (auto gid : requested) {
+    auto up = std::upper_bound(bundle.record_offsets.begin(), bundle.record_offsets.end(), gid);
+    if (up == bundle.record_offsets.begin() || up == bundle.record_offsets.end()) {
+      throw std::runtime_error("Requested id out of range for indexed files.");
+    }
+    size_t file_idx = static_cast<size_t>((up - bundle.record_offsets.begin()) - 1);
+    if (file_idx >= bundle.files.size()) {
+      file_idx = bundle.files.size() - 1;
+    }
+    std::uint64_t local_id = gid - bundle.record_offsets[file_idx];
+    local_ids_by_file[file_idx].push_back(local_id);
+  }
+
+  fastqindex_core::Extractor extractor;
+  for (size_t file_idx = 0; file_idx < local_ids_by_file.size(); ++file_idx) {
+    auto local_ids = local_ids_by_file[file_idx];
+    if (local_ids.empty()) {
+      continue;
+    }
+    std::sort(local_ids.begin(), local_ids.end());
+    local_ids.erase(std::unique(local_ids.begin(), local_ids.end()), local_ids.end());
+    std::unordered_set<std::uint64_t> requested_set(local_ids.begin(), local_ids.end());
+    auto regions = denseRegions(local_ids);
+    for (const auto& rg : regions) {
+      std::uint64_t region_start = rg.first;
+      std::uint64_t region_end = rg.second;
+      std::uint64_t line_start = region_start * static_cast<std::uint64_t>(bundle.record_size);
+      std::uint64_t line_count =
+        (region_end - region_start + 1) * static_cast<std::uint64_t>(bundle.record_size);
+
+      try {
+        std::vector<std::string> lines = extractor.extract(
+          Rcpp::as<std::string>(files[file_idx]),
+          bundle.indexed_files[file_idx].index.entries,
+          line_start,
+          line_count
+        );
+        std::size_t extracted_records = lines.size() / static_cast<std::size_t>(bundle.record_size);
+        for (std::size_t r = 0; r < extracted_records; ++r) {
+          std::uint64_t local_id = region_start + static_cast<std::uint64_t>(r);
+          if (requested_set.find(local_id) == requested_set.end()) {
+            continue;
+          }
+          ParsedRecord rec = parseRecordFromFixedLines(
+            bundle.format,
+            lines,
+            r * static_cast<std::size_t>(bundle.record_size)
+          );
+          std::uint64_t global_id = bundle.record_offsets[file_idx] + local_id;
+          selected_global[global_id] = std::move(rec);
+        }
+      } catch (...) {
+        // fastqindexr change: Fallback preserves correctness when random-seek
+        // extraction fails for particular gzip layouts.
+        sequentialFallbackCollect(
+          Rcpp::as<std::string>(files[file_idx]),
+          bundle.format,
+          requested_set,
+          bundle.record_offsets[file_idx],
+          &selected_global
+        );
+      }
+    }
+  }
+
+  return selected_global;
+}
+
+std::string resolveOutputType(const std::string& requested_type, const std::string& source_type) {
+  std::string out_type = requested_type;
+  if (out_type == "auto") {
+    out_type = source_type;
+  }
+  if (out_type != "fasta" && out_type != "fastq") {
+    throw std::runtime_error("`type` must be one of 'auto', 'fasta', or 'fastq'.");
+  }
+  if (source_type == "fasta" && out_type == "fastq") {
+    throw std::runtime_error("Cannot emit FASTQ output from FASTA index input.");
+  }
+  return out_type;
+}
+
+std::string renderRecord(const ParsedRecord& record, const std::string& output_type) {
+  if (output_type == "fastq") {
+    return "@" + record.id + "\n" + record.seq + "\n+\n" + record.qual + "\n";
+  }
+  return ">" + record.id + "\n" + record.seq + "\n";
+}
+
 }  // namespace
 
 // [[Rcpp::export]]
@@ -551,79 +719,8 @@ Rcpp::List cpp_extract_sequences(
     );
   }
 
-  std::vector<std::uint64_t> requested(ids_zero_based.size());
-  for (R_xlen_t i = 0; i < ids_zero_based.size(); ++i) {
-    requested[i] = static_cast<std::uint64_t>(ids_zero_based[i]);
-  }
-
-  std::unordered_map<std::uint64_t, ParsedRecord> selected_global;
-  selected_global.reserve(requested.size());
-
-  std::vector<std::vector<std::uint64_t>> local_ids_by_file(bundle.files.size());
-  for (auto gid : requested) {
-    auto up = std::upper_bound(bundle.record_offsets.begin(), bundle.record_offsets.end(), gid);
-    if (up == bundle.record_offsets.begin() || up == bundle.record_offsets.end()) {
-      throw std::runtime_error("Requested id out of range for indexed files.");
-    }
-    size_t file_idx = static_cast<size_t>((up - bundle.record_offsets.begin()) - 1);
-    if (file_idx >= bundle.files.size()) {
-      file_idx = bundle.files.size() - 1;
-    }
-    std::uint64_t local_id = gid - bundle.record_offsets[file_idx];
-    local_ids_by_file[file_idx].push_back(local_id);
-  }
-
-  fastqindex_core::Extractor extractor;
-
-  for (size_t file_idx = 0; file_idx < local_ids_by_file.size(); ++file_idx) {
-    auto local_ids = local_ids_by_file[file_idx];
-    if (local_ids.empty()) {
-      continue;
-    }
-    std::sort(local_ids.begin(), local_ids.end());
-    local_ids.erase(std::unique(local_ids.begin(), local_ids.end()), local_ids.end());
-    std::unordered_set<std::uint64_t> requested_set(local_ids.begin(), local_ids.end());
-    auto regions = denseRegions(local_ids);
-    for (const auto& rg : regions) {
-      std::uint64_t region_start = rg.first;
-      std::uint64_t region_end = rg.second;
-      std::uint64_t line_start = region_start * static_cast<std::uint64_t>(bundle.record_size);
-      std::uint64_t line_count = (region_end - region_start + 1) * static_cast<std::uint64_t>(bundle.record_size);
-
-      try {
-        std::vector<std::string> lines = extractor.extract(
-          Rcpp::as<std::string>(files[file_idx]),
-          bundle.indexed_files[file_idx].index.entries,
-          line_start,
-          line_count
-        );
-        std::size_t extracted_records = lines.size() / static_cast<std::size_t>(bundle.record_size);
-        for (std::size_t r = 0; r < extracted_records; ++r) {
-          std::uint64_t local_id = region_start + static_cast<std::uint64_t>(r);
-          if (requested_set.find(local_id) == requested_set.end()) {
-            continue;
-          }
-          ParsedRecord rec = parseRecordFromFixedLines(
-            bundle.format,
-            lines,
-            r * static_cast<std::size_t>(bundle.record_size)
-          );
-          std::uint64_t global_id = bundle.record_offsets[file_idx] + local_id;
-          selected_global[global_id] = std::move(rec);
-        }
-      } catch (...) {
-        // fastqindexr change: Fallback preserves correctness when random-seek
-        // extraction fails for particular gzip layouts.
-        sequentialFallbackCollect(
-          Rcpp::as<std::string>(files[file_idx]),
-          bundle.format,
-          requested_set,
-          bundle.record_offsets[file_idx],
-          &selected_global
-        );
-      }
-    }
-  }
+  const std::vector<std::uint64_t> requested = parseRequestedIds(ids_zero_based);
+  const SelectedRecordMap selected_global = collectRequestedRecords(files, bundle, requested);
 
   R_xlen_t n = ids_zero_based.size();
   Rcpp::CharacterVector out_id(n);
@@ -645,4 +742,53 @@ Rcpp::List cpp_extract_sequences(
     Rcpp::Named("seq") = out_seq,
     Rcpp::Named("qual") = out_qual
   );
+}
+
+// [[Rcpp::export]]
+double cpp_extract_sequences_to_file(
+  Rcpp::CharacterVector files,
+  std::string source_type,
+  Rcpp::NumericVector ids_zero_based,
+  SEXP index_ptr_sexp,
+  std::string output_type,
+  std::string outfile,
+  bool append,
+  bool compress
+) {
+  if (!cpp_index_ptr_is_valid(index_ptr_sexp)) {
+    throw std::runtime_error("Invalid index pointer; recreate from serialized payload.");
+  }
+  Rcpp::XPtr<IndexBundle> index_ptr(index_ptr_sexp);
+  IndexBundle& bundle = *index_ptr;
+  if (bundle.format != source_type) {
+    throw std::runtime_error("Type mismatch between index and request.");
+  }
+  if (static_cast<size_t>(files.size()) != bundle.files.size()) {
+    throw std::runtime_error("Override `file` must contain same file count as index.");
+  }
+  if (ids_zero_based.size() < 1) {
+    return 0.0;
+  }
+
+  const std::string resolved_output_type = resolveOutputType(output_type, bundle.format);
+  const std::vector<std::uint64_t> requested = parseRequestedIds(ids_zero_based);
+  const SelectedRecordMap selected_global = collectRequestedRecords(files, bundle, requested);
+
+  std::unique_ptr<OutputWriter> writer;
+  if (compress) {
+    writer = std::make_unique<GzipOutputWriter>(outfile, append);
+  } else {
+    writer = std::make_unique<PlainOutputWriter>(outfile, append);
+  }
+
+  std::uint64_t written = 0;
+  for (auto gid : requested) {
+    auto it = selected_global.find(gid);
+    if (it == selected_global.end()) {
+      throw std::runtime_error("Could not resolve all requested ids with provided index/files.");
+    }
+    writer->write(renderRecord(it->second, resolved_output_type));
+    written++;
+  }
+  return static_cast<double>(written);
 }

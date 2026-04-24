@@ -138,6 +138,10 @@ unlink(tmp)
   - duplicate IDs are allowed and duplicated in output
   - for FASTQ, output includes `seq_id`, `seq`, and `qual`; for FASTA, it
     includes `seq_id` and `seq`
+- `extract_sequences_to_file(index, seq_idx, file = NULL, outfile, ...)`
+  - streams extracted records directly to file (plain or `.gz`)
+  - preserves input order and duplicate IDs exactly
+  - supports `type = "auto"`, `"fasta"`, or `"fastq"` output
 - `make_benchmark_fasta(path, n = 5000, width = 80)`
   - writes synthetic gzipped FASTA for repeatable benchmark setup
 

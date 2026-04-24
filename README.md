@@ -92,21 +92,21 @@ system.time(
   idx <- create_index(tmp, type = "fasta")
 )
 #>    user  system elapsed 
-#>   0.045   0.000   0.045
+#>   0.009   0.001   0.008
 
 # Biostrings index creation
 system.time(
   bi_index <- Biostrings::fasta.index(tmp, seqtype = "DNA")
 )
 #>    user  system elapsed 
-#>   1.710   0.067   1.787
+#>   1.387   0.073   1.485
 
 # fastqindexr indexed extraction
 system.time({
   res_fastqindexr <- extract_sequences(idx, ids)
 })
 #>    user  system elapsed 
-#>   0.027   0.000   0.027
+#>    0.01    0.00    0.01
 
 # Biostrings indexed extraction
 system.time({
@@ -114,7 +114,7 @@ system.time({
   res_biostrings <- Biostrings::readDNAStringSet(selected)
 })
 #>    user  system elapsed 
-#>   3.833   0.052   3.892
+#>   3.635   0.052   3.693
 
 # verify that sequences and named are identical
 all.equal(
@@ -148,6 +148,10 @@ unlink(tmp)
   - duplicate IDs are allowed and duplicated in output
   - for FASTQ, output includes `seq_id`, `seq`, and `qual`; for FASTA,
     it includes `seq_id` and `seq`
+- `extract_sequences_to_file(index, seq_idx, file = NULL, outfile, ...)`
+  - streams extracted records directly to file (plain or `.gz`)
+  - preserves input order and duplicate IDs exactly
+  - supports `type = "auto"`, `"fasta"`, or `"fastq"` output
 - `make_benchmark_fasta(path, n = 5000, width = 80)`
   - writes synthetic gzipped FASTA for repeatable benchmark setup
 
