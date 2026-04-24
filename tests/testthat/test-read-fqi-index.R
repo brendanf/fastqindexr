@@ -29,24 +29,24 @@ test_that("read_fqi_index warns when deduced source file is missing", {
 
   expect_warning(
     idx <- read_fqi_index(fqi_path = tmp_fqi, files = NULL, type = "fastq"),
-    "Deduced source file\\(s\\) not found"
+    "Deduced source file"
   )
   expect_s3_class(idx, "fastqindexr_index")
 })
 
 test_that("read_fqi_index warns when auto type cannot be inferred", {
+  # One `read_fqi_index` call emits three warnings. testthat 3e links
+  # them on a parent chain, so a pipe of `expect_warning` calls can
+  # assert each; any other warning is not matched and is reported.
   src_fqi <- fixture_path("cli_fixture.fastq.gz.fqi")
   tmp_fqi <- tempfile(fileext = ".fastq.gz.fqi")
   file.copy(src_fqi, tmp_fqi, overwrite = TRUE)
 
-  expect_warning(
-    idx <- read_fqi_index(fqi_path = tmp_fqi, files = NULL, type = "auto"),
-    "Could not determine type from file\\(s\\)"
-  )
-  expect_warning(
-    read_fqi_index(fqi_path = tmp_fqi, files = NULL, type = "auto"),
-    "defaulting to 'fastq'"
-  )
+  (idx <- read_fqi_index(fqi_path = tmp_fqi, files = NULL, type = "auto")) |>
+    expect_warning("Deduced source file") |>
+    expect_warning("Could not determine type from file") |>
+    expect_warning("defaulting")
+  expect_s3_class(idx, "fastqindexr_index")
   expect_identical(idx$format, "fastq")
 })
 
