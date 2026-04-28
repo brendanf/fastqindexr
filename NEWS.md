@@ -2,6 +2,10 @@
 
 ## Development
 
+- Fix a bug reading certain .fqi indexes written by FastqIndEx.
+
+## 0.0.2
+
 - Faster extraction when `seq_idx` is **strictly increasing** (so 0-based global
   IDs are sorted with no duplicates): skip per-file `sort` / `unique` on local
   record indices. Unsorted or duplicate `seq_idx` uses the previous path.

@@ -17,6 +17,7 @@ struct IndexEntry {
   std::uint64_t starting_line_in_entry{0};
   std::uint32_t offset_to_next_line_start{0};
   unsigned char bits{0};
+  std::uint16_t compressed_dictionary_size{0};
   std::vector<unsigned char> dictionary;
 };
 

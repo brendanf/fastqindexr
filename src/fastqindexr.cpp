@@ -126,6 +126,7 @@ Rcpp::List serializeIndexedFile(const IndexedFile& indexed_file) {
   Rcpp::NumericVector block_offset(n);
   Rcpp::NumericVector starting_line(n);
   Rcpp::NumericVector offset_next_line(n);
+  Rcpp::IntegerVector compressed_dictionary_size(n);
   Rcpp::IntegerVector bits(n);
   Rcpp::RawVector dictionary_blob(
     static_cast<R_xlen_t>(entries.size() * fastqindex_core::WINDOW_SIZE)
@@ -140,6 +141,7 @@ Rcpp::List serializeIndexedFile(const IndexedFile& indexed_file) {
     block_offset[i] = static_cast<double>(entry.block_offset_in_raw_file);
     starting_line[i] = static_cast<double>(entry.starting_line_in_entry);
     offset_next_line[i] = static_cast<double>(entry.offset_to_next_line_start);
+    compressed_dictionary_size[i] = static_cast<int>(entry.compressed_dictionary_size);
     bits[i] = static_cast<int>(entry.bits);
 
     const size_t dictionary_offset = static_cast<size_t>(i) * fastqindex_core::WINDOW_SIZE;
@@ -155,6 +157,7 @@ Rcpp::List serializeIndexedFile(const IndexedFile& indexed_file) {
     Rcpp::Named("block_offset_in_raw_file") = block_offset,
     Rcpp::Named("starting_line_in_entry") = starting_line,
     Rcpp::Named("offset_to_next_line_start") = offset_next_line,
+    Rcpp::Named("compressed_dictionary_size") = compressed_dictionary_size,
     Rcpp::Named("bits") = bits,
     Rcpp::Named("dictionary_blob") = dictionary_blob,
     Rcpp::Named("total_lines") = static_cast<double>(indexed_file.index.total_lines),
@@ -174,7 +177,7 @@ Rcpp::List serializeIndexBundle(const IndexBundle& bundle) {
   }
 
   return Rcpp::List::create(
-    Rcpp::Named("schema_version") = 1L,
+    Rcpp::Named("schema_version") = 2L,
     Rcpp::Named("format") = bundle.format,
     Rcpp::Named("record_size") = bundle.record_size,
     Rcpp::Named("files") = bundle.files,
@@ -184,17 +187,24 @@ Rcpp::List serializeIndexBundle(const IndexBundle& bundle) {
   );
 }
 
-IndexedFile deserializeIndexedFile(const Rcpp::List& payload) {
+IndexedFile deserializeIndexedFile(const Rcpp::List& payload, int schema_version) {
   Rcpp::NumericVector block_index = payload["block_index"];
   Rcpp::NumericVector block_offset = payload["block_offset_in_raw_file"];
   Rcpp::NumericVector starting_line = payload["starting_line_in_entry"];
   Rcpp::NumericVector offset_next_line = payload["offset_to_next_line_start"];
+  Rcpp::IntegerVector compressed_dictionary_size;
+  if (schema_version >= 2 && payload.containsElementNamed("compressed_dictionary_size")) {
+    compressed_dictionary_size = payload["compressed_dictionary_size"];
+  }
   Rcpp::IntegerVector bits = payload["bits"];
   Rcpp::RawVector dictionary_blob = payload["dictionary_blob"];
 
   const R_xlen_t n = block_offset.size();
   if (block_index.size() != n || starting_line.size() != n || offset_next_line.size() != n || bits.size() != n) {
     throw std::runtime_error("Malformed serialized indexed file payload.");
+  }
+  if (compressed_dictionary_size.size() > 0 && compressed_dictionary_size.size() != n) {
+    throw std::runtime_error("Malformed compressed dictionary size payload.");
   }
   if (dictionary_blob.size() != static_cast<R_xlen_t>(n * fastqindex_core::WINDOW_SIZE)) {
     throw std::runtime_error("Malformed dictionary blob in serialized payload.");
@@ -209,6 +219,9 @@ IndexedFile deserializeIndexedFile(const Rcpp::List& payload) {
     entry.starting_line_in_entry = asUInt64(starting_line[i], "starting_line_in_entry");
     entry.offset_to_next_line_start = static_cast<std::uint32_t>(asUInt64(offset_next_line[i], "offset_to_next_line_start"));
     entry.bits = static_cast<unsigned char>(bits[i]);
+    entry.compressed_dictionary_size = (compressed_dictionary_size.size() == 0) ?
+      0 :
+      static_cast<std::uint16_t>(compressed_dictionary_size[i]);
 
     const size_t dictionary_offset = static_cast<size_t>(i) * fastqindex_core::WINDOW_SIZE;
     entry.dictionary.resize(fastqindex_core::WINDOW_SIZE);
@@ -227,7 +240,7 @@ IndexedFile deserializeIndexedFile(const Rcpp::List& payload) {
 
 IndexBundle deserializeIndexBundle(const Rcpp::List& payload) {
   const int schema_version = Rcpp::as<int>(payload["schema_version"]);
-  if (schema_version != 1) {
+  if (schema_version != 1 && schema_version != 2) {
     throw std::runtime_error("Unsupported serialized index schema version.");
   }
 
@@ -249,7 +262,7 @@ IndexBundle deserializeIndexBundle(const Rcpp::List& payload) {
   }
   bundle.indexed_files.reserve(static_cast<size_t>(indexed_files.size()));
   for (R_xlen_t i = 0; i < indexed_files.size(); ++i) {
-    bundle.indexed_files.push_back(deserializeIndexedFile(indexed_files[i]));
+    bundle.indexed_files.push_back(deserializeIndexedFile(indexed_files[i], schema_version));
   }
 
   return bundle;

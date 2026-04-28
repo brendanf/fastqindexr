@@ -14,8 +14,6 @@
 
 #include <cstring>
 #include <memory>
-#include <stdexcept>
-#include <zlib.h>
 
 namespace fastqindex_core {
 
@@ -76,25 +74,9 @@ struct IndexEntryV1 : public BaseIndexEntry {
     indexLine->starting_line_in_entry = startingLineInEntry;
     indexLine->offset_to_next_line_start = offsetToNextLineStart;
     indexLine->bits = bits;
+    indexLine->compressed_dictionary_size = compressedDictionarySize;
     indexLine->dictionary.resize(WINDOW_SIZE);
-    if (compressedDictionarySize > 0) {
-      z_stream strm;
-      std::memset(&strm, 0, sizeof(strm));
-      strm.next_in = const_cast<Bytef*>(dictionary);
-      strm.avail_in = compressedDictionarySize;
-      strm.next_out = indexLine->dictionary.data();
-      strm.avail_out = WINDOW_SIZE;
-      if (inflateInit(&strm) != Z_OK) {
-        throw std::runtime_error("inflateInit failed for compressed dictionary.");
-      }
-      const int ret = inflate(&strm, Z_FINISH);
-      inflateEnd(&strm);
-      if (ret != Z_STREAM_END || strm.total_out != WINDOW_SIZE) {
-        throw std::runtime_error("Failed to inflate compressed dictionary.");
-      }
-    } else {
-      std::memcpy(indexLine->dictionary.data(), dictionary, WINDOW_SIZE);
-    }
+    std::memcpy(indexLine->dictionary.data(), dictionary, WINDOW_SIZE);
     return indexLine;
   }
 };

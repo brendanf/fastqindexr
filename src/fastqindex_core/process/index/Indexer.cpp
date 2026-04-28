@@ -50,6 +50,7 @@ void Indexer::finalizeProcessingForCurrentBlock(
   entry.starting_line_in_entry = *line_count_for_next_index_entry;
   entry.offset_to_next_line_start = offset_first_line;
   entry.bits = static_cast<unsigned char>(*cur_bits);
+  entry.compressed_dictionary_size = 0;
   entry.dictionary = *dictionary_for_next_block;
 
   // fastqindexr change: we keep dictionary uncompressed in-memory instead of writing .fqi.

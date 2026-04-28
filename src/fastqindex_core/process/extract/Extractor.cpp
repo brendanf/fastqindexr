@@ -77,8 +77,32 @@ std::vector<std::string> Extractor::extract(
     }
   }
 
-  if (entry->dictionary.size() != WINDOW_SIZE ||
-      inflateSetDictionary(&strm, entry->dictionary.data(), WINDOW_SIZE) != Z_OK) {
+  std::vector<unsigned char> dictionary_for_inflate;
+  const unsigned char* dictionary_ptr = nullptr;
+  if (entry->compressed_dictionary_size > 0) {
+    uLongf dest_len = WINDOW_SIZE;
+    dictionary_for_inflate.assign(WINDOW_SIZE, 0);
+    uLong source_len = entry->compressed_dictionary_size;
+    if (entry->dictionary.size() < source_len ||
+        uncompress2(
+          dictionary_for_inflate.data(),
+          &dest_len,
+          entry->dictionary.data(),
+          &source_len
+        ) != Z_OK ||
+        dest_len != WINDOW_SIZE) {
+      inflateEnd(&strm);
+      throw std::runtime_error("Failed to decompress index dictionary.");
+    }
+    dictionary_ptr = dictionary_for_inflate.data();
+  } else if (entry->dictionary.size() == WINDOW_SIZE) {
+    dictionary_ptr = entry->dictionary.data();
+  } else {
+    inflateEnd(&strm);
+    throw std::runtime_error("Unexpected dictionary size in index entry.");
+  }
+
+  if (inflateSetDictionary(&strm, dictionary_ptr, WINDOW_SIZE) != Z_OK) {
     inflateEnd(&strm);
     throw std::runtime_error("inflateSetDictionary failed.");
   }
