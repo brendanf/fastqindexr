@@ -27,7 +27,8 @@ IDs, \code{"zero_based"} uses \code{"0"}, \code{"1"}, ..., and \code{"one_based"
 
 \item{chunk_chars}{Approximate number of sequence characters to process per
 chunk when building the return object. Larger values may reduce overhead
-but increase temporary memory usage.}
+but increase temporary memory usage. Must be a finite positive number (not
+\code{NA}, not \code{Inf}).}
 }
 \value{
 A \code{Biostrings::DNAStringSet}.

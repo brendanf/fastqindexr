@@ -1209,11 +1209,6 @@ Rcpp::List cpp_extract_sequences(
   }
 
   const std::vector<std::uint64_t> requested = parseRequestedIds(ids_zero_based);
-  const bool need_parsed_qual = (bundle.format == "fastq" && include_qual);
-  const SelectedRecordMap selected_global = collectRequestedRecords(
-    files, bundle, requested, need_parsed_qual
-  );
-
   R_xlen_t n = ids_zero_based.size();
   Rcpp::CharacterVector out_id(n);
   Rcpp::CharacterVector out_seq(n);
@@ -1221,16 +1216,54 @@ Rcpp::List cpp_extract_sequences(
   if (return_qual) {
     out_qual = Rcpp::CharacterVector(n);
   }
+
+  std::unordered_map<std::uint64_t, std::vector<R_xlen_t>> positions_by_gid;
+  positions_by_gid.reserve(static_cast<size_t>(requested.size()));
   for (R_xlen_t i = 0; i < n; ++i) {
-    std::uint64_t gid = requested[i];
-    auto it = selected_global.find(gid);
-    if (it == selected_global.end()) {
-      throw std::runtime_error("Could not resolve all requested ids with provided index/files.");
-    }
-    out_id[i] = it->second.id;
-    out_seq[i] = it->second.seq;
-    if (return_qual) {
-      out_qual[i] = it->second.qual;
+    positions_by_gid[requested[static_cast<size_t>(i)]].push_back(i);
+  }
+  std::vector<std::uint64_t> unique_ids;
+  unique_ids.reserve(positions_by_gid.size());
+  for (const auto& kv : positions_by_gid) {
+    unique_ids.push_back(kv.first);
+  }
+  std::sort(unique_ids.begin(), unique_ids.end());
+
+  constexpr std::size_t kChunkUniqueIds = 50000;
+  const bool need_parsed_qual = (bundle.format == "fastq" && include_qual);
+  for (std::size_t start = 0; start < unique_ids.size(); start += kChunkUniqueIds) {
+    const std::size_t end = std::min(start + kChunkUniqueIds, unique_ids.size());
+    std::vector<std::uint64_t> chunk_ids(
+      unique_ids.begin() + static_cast<std::ptrdiff_t>(start),
+      unique_ids.begin() + static_cast<std::ptrdiff_t>(end)
+    );
+    const SelectedRecordMap selected_chunk = collectRequestedRecords(
+      files, bundle, chunk_ids, need_parsed_qual
+    );
+    for (std::uint64_t gid : chunk_ids) {
+      auto rec_it = selected_chunk.find(gid);
+      if (rec_it == selected_chunk.end()) {
+        throw std::runtime_error("Could not resolve all requested ids with provided index/files.");
+      }
+      const ParsedRecord& rec = rec_it->second;
+      SEXP id_ch = Rf_mkCharLen(rec.id.c_str(), static_cast<int>(rec.id.size()));
+      SEXP seq_ch = Rf_mkCharLen(rec.seq.c_str(), static_cast<int>(rec.seq.size()));
+      SEXP qual_ch = R_NilValue;
+      if (return_qual) {
+        qual_ch = Rf_mkCharLen(rec.qual.c_str(), static_cast<int>(rec.qual.size()));
+      }
+
+      const auto pos_it = positions_by_gid.find(gid);
+      if (pos_it == positions_by_gid.end()) {
+        continue;
+      }
+      for (R_xlen_t pos : pos_it->second) {
+        SET_STRING_ELT(out_id, pos, id_ch);
+        SET_STRING_ELT(out_seq, pos, seq_ch);
+        if (return_qual) {
+          SET_STRING_ELT(out_qual, pos, qual_ch);
+        }
+      }
     }
   }
 
@@ -1326,8 +1359,8 @@ SEXP cpp_extract_sequences_dnastringset(
   if (static_cast<size_t>(files.size()) != bundle.files.size()) {
     throw std::runtime_error("Override `file` must contain same file count as index.");
   }
-  if (chunk_chars <= 0.0) {
-    throw std::runtime_error("`chunk_chars` must be positive.");
+  if (!std::isfinite(chunk_chars) || chunk_chars <= 0.0) {
+    throw std::runtime_error("`chunk_chars` must be a finite positive value.");
   }
   if (renumber_mode != "none" &&
       renumber_mode != "zero_based" &&

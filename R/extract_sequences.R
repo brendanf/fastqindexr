@@ -498,7 +498,8 @@ extract_sequences_to_file <- function(
 #'   `"1"`, `"2"`, ....
 #' @param chunk_chars Approximate number of sequence characters to process per
 #'   chunk when building the return object. Larger values may reduce overhead
-#'   but increase temporary memory usage.
+#'   but increase temporary memory usage. Must be a finite positive number (not
+#'   `NA`, not `Inf`).
 #'
 #' @return A `Biostrings::DNAStringSet`.
 #'
@@ -518,9 +519,13 @@ extract_sequences_dnastringset <- function(
     !is.numeric(chunk_chars) ||
       length(chunk_chars) != 1L ||
       is.na(chunk_chars) ||
+      !is.finite(chunk_chars) ||
       chunk_chars <= 0
   ) {
-    stop("`chunk_chars` must be a positive numeric scalar.", call. = FALSE)
+    stop(
+      "`chunk_chars` must be a finite positive numeric scalar.",
+      call. = FALSE
+    )
   }
   resolved <- resolve_extract_index(index, file)
   index <- validate_index(resolved$index)

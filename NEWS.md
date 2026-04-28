@@ -9,6 +9,7 @@
   `compress` and preserves strict-increasing fast-path behavior per partition.
 - Add `extract_sequences_dnastringset()` with chunked construction of
   `Biostrings::DNAStringSet` for improved large-request memory behavior.
+- Add similar chunked extraction to `extract_sequences()` for reduced memory usage in large extracts.
 
 ## 0.0.2
 
