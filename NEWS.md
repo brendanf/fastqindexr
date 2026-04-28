@@ -2,6 +2,11 @@
 
 - Fix a bug reading certain .fqi indexes written by FastqIndEx.
 - Fix a bug when reusing the same index for many small extractions.
+- Add `partition_seq_idx()` for stable contiguous or round-robin partitioning
+  of requested sequence IDs while preserving order and duplicates.
+- Extend `extract_sequences_to_file()` with partitioned mode by passing a list
+  to `seq_idx` and a matching vector to `outfile`. Supports scalar/vector
+  `compress` and preserves strict-increasing fast-path behavior per partition.
 
 ## 0.0.2
 

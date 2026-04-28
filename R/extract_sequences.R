@@ -55,6 +55,110 @@ ensure_live_index_ptr <- function(index) {
 }
 # nolint end
 
+#' @noRd
+validate_seq_idx <- function(seq_idx, n_records, arg_name = "`seq_idx`") {
+  if (!is.numeric(seq_idx)) {
+    stop(sprintf("%s must be numeric/integer-like.", arg_name), call. = FALSE)
+  }
+  if (any(is.na(seq_idx) | seq_idx < 1 | seq_idx != floor(seq_idx))) {
+    stop(
+      sprintf("%s must contain positive whole numbers (1-based).", arg_name),
+      call. = FALSE
+    )
+  }
+  if (any(seq_idx > n_records)) {
+    stop(
+      sprintf("Some %s exceed available records (%s).", arg_name, n_records),
+      call. = FALSE
+    )
+  }
+  as.numeric(seq_idx)
+}
+
+#' @noRd
+create_empty_extract_file <- function(path, compress) {
+  if (compress) {
+    con <- gzfile(path, open = "wb")
+  } else {
+    con <- file(path, open = "wb")
+  }
+  close(con)
+}
+
+#' Partition sequence IDs into stable batches
+#'
+#' Splits a numeric vector of 1-based sequence IDs into `n_parts` partitions
+#' while preserving order within each partition. Duplicate IDs are preserved.
+#'
+#' @param seq_idx Numeric vector of positive whole-number sequence IDs.
+#' @param n_parts Number of partitions to create (positive whole number).
+#' @param strategy Partitioning strategy: `"contiguous"` or `"round_robin"`.
+#' @param drop_empty If `TRUE`, empty partitions are removed from the output.
+#'
+#' @return A list of integer vectors containing partitioned IDs.
+#'
+#' @export
+partition_seq_idx <- function(
+  seq_idx,
+  n_parts,
+  strategy = c("contiguous", "round_robin"),
+  drop_empty = TRUE
+) {
+  strategy <- match.arg(strategy)
+  if (!is.numeric(seq_idx)) {
+    stop("`seq_idx` must be numeric/integer-like.", call. = FALSE)
+  }
+  if (any(is.na(seq_idx) | seq_idx < 1 | seq_idx != floor(seq_idx))) {
+    stop(
+      "`seq_idx` must contain positive whole numbers (1-based).",
+      call. = FALSE
+    )
+  }
+  if (
+    !is.numeric(n_parts) ||
+      length(n_parts) != 1L ||
+      is.na(n_parts) ||
+      n_parts < 1 ||
+      n_parts != floor(n_parts)
+  ) {
+    stop("`n_parts` must be a positive whole number.", call. = FALSE)
+  }
+  if (
+    !is.logical(drop_empty) || length(drop_empty) != 1L || is.na(drop_empty)
+  ) {
+    stop("`drop_empty` must be TRUE or FALSE.", call. = FALSE)
+  }
+
+  seq_idx <- as.integer(seq_idx)
+  n_parts <- as.integer(n_parts)
+  out <- replicate(n_parts, integer(), simplify = FALSE)
+  if (length(seq_idx) > 0L) {
+    if (identical(strategy, "contiguous")) {
+      base_size <- length(seq_idx) %/% n_parts
+      n_larger <- length(seq_idx) %% n_parts
+      start <- 1L
+      for (i in seq_len(n_parts)) {
+        size_i <- base_size + if (i <= n_larger) 1L else 0L
+        if (size_i > 0L) {
+          end <- start + size_i - 1L
+          out[[i]] <- seq_idx[start:end]
+          start <- end + 1L
+        }
+      }
+    } else {
+      slot <- ((seq_along(seq_idx) - 1L) %% n_parts) + 1L
+      out <- split(seq_idx, slot)
+      out <- out[as.character(seq_len(n_parts))]
+    }
+  }
+
+  if (drop_empty) {
+    out[vapply(out, length, integer(1L)) > 0L]
+  } else {
+    out
+  }
+}
+
 #' Extract sequence records by ID from indexed gzipped FASTA or FASTQ
 #'
 #' Returns rows in **the same order as `seq_idx`**, including duplicate IDs. IDs
@@ -156,23 +260,8 @@ extract_sequences <- function(
     ))
   }
 
-  if (!is.numeric(seq_idx)) {
-    stop("`seq_idx` must be numeric/integer-like.", call. = FALSE)
-  }
-  if (any(is.na(seq_idx) | seq_idx < 1 | seq_idx != floor(seq_idx))) {
-    stop(
-      "`seq_idx` must contain positive whole numbers (1-based).",
-       call. = FALSE
-     )
-  }
-
   n_records <- as.numeric(index$n_records)
-  if (any(seq_idx > n_records)) {
-    stop(
-      sprintf("Some seq_idx exceed available records (%s).", n_records),
-      call. = FALSE
-    )
-  }
+  seq_idx <- validate_seq_idx(seq_idx = seq_idx, n_records = n_records)
 
   files <- if (is.null(file)) {
     as.character(index$files)
@@ -290,36 +379,15 @@ extract_sequences_to_file <- function(
   index <- live_index$index
   index_ptr <- live_index$ptr
 
-  if (!is.character(outfile) || length(outfile) != 1L || !nzchar(outfile)) {
-    stop("`outfile` must be a non-empty character scalar.", call. = FALSE)
-  }
   if (!is.logical(append) || length(append) != 1L || is.na(append)) {
     stop("`append` must be TRUE or FALSE.", call. = FALSE)
   }
-  if (!is.logical(compress) || length(compress) != 1L || is.na(compress)) {
-    stop("`compress` must be TRUE or FALSE.", call. = FALSE)
+  if (!is.character(outfile) || length(outfile) < 1L || any(!nzchar(outfile))) {
+    stop("`outfile` must be a non-empty character vector.", call. = FALSE)
   }
-
-  if (length(seq_idx) < 1L) {
-    return(invisible(normalizePath(outfile, winslash = "/", mustWork = FALSE)))
-  }
-  if (!is.numeric(seq_idx)) {
-    stop("`seq_idx` must be numeric/integer-like.", call. = FALSE)
-  }
-  if (any(is.na(seq_idx) | seq_idx < 1 | seq_idx != floor(seq_idx))) {
-    stop(
-      "`seq_idx` must contain positive whole numbers (1-based).",
-      call. = FALSE
-    )
-  }
+  is_partition_mode <- is.list(seq_idx) || length(outfile) > 1L
 
   n_records <- as.numeric(index$n_records)
-  if (any(seq_idx > n_records)) {
-    stop(
-      sprintf("Some seq_idx exceed available records (%s).", n_records),
-      call. = FALSE
-    )
-  }
 
   files <- if (is.null(file)) {
     as.character(index$files)
@@ -338,6 +406,67 @@ extract_sequences_to_file <- function(
   }
 
   type <- match.arg(type)
+  if (is_partition_mode) {
+    if (!is.list(seq_idx)) {
+      stop("Partitioned mode requires `seq_idx` to be a list.", call. = FALSE)
+    }
+    if (length(seq_idx) != length(outfile)) {
+      stop("`outfile` must match `seq_idx` list length.", call. = FALSE)
+    }
+    if (
+      !is.logical(compress) ||
+        any(is.na(compress)) ||
+        !(length(compress) %in% c(1L, length(outfile)))
+    ) {
+      stop(
+        paste0(
+          "`compress` must be TRUE/FALSE scalar or vector matching ",
+          "`outfile` length."
+        ),
+        call. = FALSE
+      )
+    }
+    compress_vec <- if (length(compress) == 1L) {
+      rep(compress, length(outfile))
+    } else {
+      compress
+    }
+    out_norm <- normalizePath(outfile, winslash = "/", mustWork = FALSE)
+    for (i in seq_along(seq_idx)) {
+      ids_i <- seq_idx[[i]]
+      if (length(ids_i) < 1L) {
+        if (!append) {
+          create_empty_extract_file(outfile[i], compress = compress_vec[i])
+        }
+        next
+      }
+      ids_i <- validate_seq_idx(
+        seq_idx = ids_i,
+        n_records = n_records,
+        arg_name = "`seq_idx` partition"
+      )
+      # nolint nextline: object_usage_linter
+      cpp_extract_sequences_to_file(
+        files = files,
+        source_type = index$format,
+        ids_zero_based = as.numeric(ids_i - 1),
+        index_ptr_sexp = index_ptr,
+        output_type = type,
+        outfile = outfile[i],
+        append = append,
+        compress = compress_vec[i]
+      )
+    }
+    return(invisible(out_norm))
+  }
+
+  if (!is.logical(compress) || length(compress) != 1L || is.na(compress)) {
+    stop("`compress` must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (length(seq_idx) < 1L) {
+    return(invisible(normalizePath(outfile, winslash = "/", mustWork = FALSE)))
+  }
+  seq_idx <- validate_seq_idx(seq_idx = seq_idx, n_records = n_records)
   # nolint nextline: object_usage_linter
   cpp_extract_sequences_to_file(
     files = files,
