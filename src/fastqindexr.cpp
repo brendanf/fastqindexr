@@ -789,6 +789,243 @@ double streamSortedUniqueToFile(
   return static_cast<double>(n_written);
 }
 
+SEXP makeDNAStringSetChunk(
+  const std::vector<std::string>& seq_chunk,
+  const std::vector<std::string>& id_chunk,
+  const std::string& renumber_mode,
+  std::uint64_t output_index_start
+) {
+  const R_xlen_t n = static_cast<R_xlen_t>(seq_chunk.size());
+  Rcpp::CharacterVector seq_vec(n);
+  for (R_xlen_t i = 0; i < n; ++i) {
+    seq_vec[i] = seq_chunk[static_cast<size_t>(i)];
+  }
+
+  Rcpp::Environment biostrings = Rcpp::Environment::namespace_env("Biostrings");
+  Rcpp::Function dna_string_set = biostrings["DNAStringSet"];
+  SEXP dna = dna_string_set(seq_vec, Rcpp::Named("use.names") = true);
+
+  Rcpp::CharacterVector out_names(n);
+  if (renumber_mode == "none") {
+    for (R_xlen_t i = 0; i < n; ++i) {
+      out_names[i] = id_chunk[static_cast<size_t>(i)];
+    }
+  } else if (renumber_mode == "zero_based") {
+    for (R_xlen_t i = 0; i < n; ++i) {
+      out_names[i] = std::to_string(output_index_start + static_cast<std::uint64_t>(i));
+    }
+  } else {
+    for (R_xlen_t i = 0; i < n; ++i) {
+      out_names[i] = std::to_string(output_index_start + static_cast<std::uint64_t>(i) + 1);
+    }
+  }
+  Rcpp::Function set_names = Rcpp::Function("names<-");
+  return set_names(dna, out_names);
+}
+
+void flushDNAChunk(
+  std::vector<std::string>* seq_chunk,
+  std::vector<std::string>* id_chunk,
+  Rcpp::List* dna_chunks,
+  const std::string& renumber_mode,
+  std::uint64_t output_index_start
+) {
+  if (seq_chunk->empty()) {
+    return;
+  }
+  dna_chunks->push_back(
+    makeDNAStringSetChunk(*seq_chunk, *id_chunk, renumber_mode, output_index_start)
+  );
+  seq_chunk->clear();
+  id_chunk->clear();
+}
+
+void appendRecordToDNAChunks(
+  const ParsedRecord& rec,
+  std::uint64_t chunk_chars_limit,
+  std::vector<std::string>* seq_chunk,
+  std::vector<std::string>* id_chunk,
+  std::uint64_t* chunk_chars,
+  std::uint64_t* output_index,
+  Rcpp::List* dna_chunks,
+  const std::string& renumber_mode
+) {
+  const std::uint64_t rec_chars = static_cast<std::uint64_t>(rec.seq.size());
+  if (!seq_chunk->empty() && (*chunk_chars + rec_chars > chunk_chars_limit)) {
+    const std::uint64_t chunk_start = *output_index - seq_chunk->size();
+    flushDNAChunk(seq_chunk, id_chunk, dna_chunks, renumber_mode, chunk_start);
+    *chunk_chars = 0;
+  }
+
+  seq_chunk->push_back(rec.seq);
+  id_chunk->push_back(rec.id);
+  *chunk_chars += rec_chars;
+  (*output_index)++;
+}
+
+SEXP buildDNAStringSetFromRequested(
+  Rcpp::CharacterVector files,
+  const IndexBundle& bundle,
+  const std::vector<std::uint64_t>& requested,
+  std::uint64_t chunk_chars_limit,
+  const std::string& renumber_mode
+) {
+  const bool sorted_unique = requestIsSortedUnique(requested);
+  std::vector<std::string> seq_chunk;
+  std::vector<std::string> id_chunk;
+  seq_chunk.reserve(1024);
+  id_chunk.reserve(1024);
+  Rcpp::List dna_chunks;
+  std::uint64_t chunk_chars = 0;
+  std::uint64_t output_index = 0;
+
+  if (!sorted_unique) {
+    const SelectedRecordMap selected_global = collectRequestedRecords(
+      files, bundle, requested, false
+    );
+    for (auto gid : requested) {
+      auto it = selected_global.find(gid);
+      if (it == selected_global.end()) {
+        throw std::runtime_error("Could not resolve all requested ids with provided index/files.");
+      }
+      appendRecordToDNAChunks(
+        it->second,
+        chunk_chars_limit,
+        &seq_chunk,
+        &id_chunk,
+        &chunk_chars,
+        &output_index,
+        &dna_chunks,
+        renumber_mode
+      );
+    }
+  } else {
+    std::vector<std::vector<std::uint64_t>> local_ids_by_file(bundle.files.size());
+    for (auto gid : requested) {
+      auto up = std::upper_bound(bundle.record_offsets.begin(), bundle.record_offsets.end(), gid);
+      if (up == bundle.record_offsets.begin() || up == bundle.record_offsets.end()) {
+        throw std::runtime_error("Requested id out of range for indexed files.");
+      }
+      size_t file_idx = static_cast<size_t>((up - bundle.record_offsets.begin()) - 1);
+      if (file_idx >= bundle.files.size()) {
+        file_idx = bundle.files.size() - 1;
+      }
+      const std::uint64_t local_id = gid - bundle.record_offsets[file_idx];
+      local_ids_by_file[file_idx].push_back(local_id);
+    }
+
+    fastqindex_core::Extractor extractor;
+    for (size_t file_idx = 0; file_idx < local_ids_by_file.size(); ++file_idx) {
+      const std::vector<std::uint64_t>& local_ids = local_ids_by_file[file_idx];
+      if (local_ids.empty()) {
+        continue;
+      }
+      const std::unordered_set<std::uint64_t> requested_set(local_ids.begin(), local_ids.end());
+      const auto regions = buildDenseRegionsFromSortedUnique(local_ids);
+      bool fell_back = false;
+
+      for (const auto& rg : regions) {
+        const std::uint64_t region_start = rg.first;
+        const std::uint64_t region_end = rg.second;
+        const std::uint64_t line_start = region_start * static_cast<std::uint64_t>(bundle.record_size);
+        const std::uint64_t line_count =
+          (region_end - region_start + 1) * static_cast<std::uint64_t>(bundle.record_size);
+        try {
+          std::vector<std::string> lines = extractor.extract(
+            Rcpp::as<std::string>(files[file_idx]),
+            bundle.indexed_files[file_idx].index.entries,
+            line_start,
+            line_count
+          );
+          if (lines.size() % static_cast<std::size_t>(bundle.record_size) != 0) {
+            throw std::runtime_error("Malformed extracted line count for region.");
+          }
+          const std::size_t expected_records = static_cast<std::size_t>(
+            region_end - region_start + 1
+          );
+          const std::size_t extracted_records =
+            lines.size() / static_cast<std::size_t>(bundle.record_size);
+          if (extracted_records < expected_records) {
+            throw std::runtime_error("Partial extraction for requested region.");
+          }
+          for (std::size_t r = 0; r < extracted_records; ++r) {
+            const std::uint64_t rec_local = region_start + static_cast<std::uint64_t>(r);
+            if (requested_set.find(rec_local) == requested_set.end()) {
+              continue;
+            }
+            const ParsedRecord rec = parseRecordFromFixedLines(
+              bundle.format,
+              lines,
+              r * static_cast<std::size_t>(bundle.record_size),
+              false
+            );
+            appendRecordToDNAChunks(
+              rec,
+              chunk_chars_limit,
+              &seq_chunk,
+              &id_chunk,
+              &chunk_chars,
+              &output_index,
+              &dna_chunks,
+              renumber_mode
+            );
+          }
+        } catch (...) {
+          fell_back = true;
+          break;
+        }
+      }
+
+      if (fell_back) {
+        std::unordered_map<std::uint64_t, ParsedRecord> selected_global;
+        sequentialFallbackCollect(
+          Rcpp::as<std::string>(files[file_idx]),
+          bundle.format,
+          requested_set,
+          bundle.record_offsets[file_idx],
+          &selected_global,
+          false
+        );
+        for (auto rec_local : local_ids) {
+          const std::uint64_t gid = bundle.record_offsets[file_idx] + rec_local;
+          auto it = selected_global.find(gid);
+          if (it == selected_global.end()) {
+            throw std::runtime_error("Could not resolve all requested ids with provided index/files.");
+          }
+          appendRecordToDNAChunks(
+            it->second,
+            chunk_chars_limit,
+            &seq_chunk,
+            &id_chunk,
+            &chunk_chars,
+            &output_index,
+            &dna_chunks,
+            renumber_mode
+          );
+        }
+      }
+    }
+  }
+
+  if (!seq_chunk.empty()) {
+    const std::uint64_t chunk_start = output_index - seq_chunk.size();
+    flushDNAChunk(&seq_chunk, &id_chunk, &dna_chunks, renumber_mode, chunk_start);
+  }
+
+  if (dna_chunks.size() == 0) {
+    Rcpp::Environment biostrings = Rcpp::Environment::namespace_env("Biostrings");
+    Rcpp::Function dna_string_set = biostrings["DNAStringSet"];
+    return dna_string_set(Rcpp::CharacterVector(), Rcpp::Named("use.names") = true);
+  }
+  if (dna_chunks.size() == 1) {
+    return dna_chunks[0];
+  }
+  Rcpp::Environment base = Rcpp::Environment::base_env();
+  Rcpp::Function do_call = base["do.call"];
+  Rcpp::Function concat = base["c"];
+  return do_call(concat, dna_chunks);
+}
+
 }  // namespace
 
 // [[Rcpp::export]]
@@ -1067,4 +1304,48 @@ double cpp_extract_sequences_to_file(
     written++;
   }
   return static_cast<double>(written);
+}
+
+// [[Rcpp::export]]
+SEXP cpp_extract_sequences_dnastringset(
+  Rcpp::CharacterVector files,
+  std::string source_type,
+  Rcpp::NumericVector ids_zero_based,
+  SEXP index_ptr_sexp,
+  double chunk_chars,
+  std::string renumber_mode
+) {
+  if (!cpp_index_ptr_is_valid(index_ptr_sexp)) {
+    throw std::runtime_error("Invalid index pointer; recreate from serialized payload.");
+  }
+  Rcpp::XPtr<IndexBundle> index_ptr(index_ptr_sexp);
+  IndexBundle& bundle = *index_ptr;
+  if (bundle.format != source_type) {
+    throw std::runtime_error("Type mismatch between index and request.");
+  }
+  if (static_cast<size_t>(files.size()) != bundle.files.size()) {
+    throw std::runtime_error("Override `file` must contain same file count as index.");
+  }
+  if (chunk_chars <= 0.0) {
+    throw std::runtime_error("`chunk_chars` must be positive.");
+  }
+  if (renumber_mode != "none" &&
+      renumber_mode != "zero_based" &&
+      renumber_mode != "one_based") {
+    throw std::runtime_error("Invalid renumber mode.");
+  }
+  if (ids_zero_based.size() == 0) {
+    Rcpp::Environment biostrings = Rcpp::Environment::namespace_env("Biostrings");
+    Rcpp::Function dna_string_set = biostrings["DNAStringSet"];
+    return dna_string_set(Rcpp::CharacterVector(), Rcpp::Named("use.names") = true);
+  }
+
+  const std::vector<std::uint64_t> requested = parseRequestedIds(ids_zero_based);
+  return buildDNAStringSetFromRequested(
+    files,
+    bundle,
+    requested,
+    static_cast<std::uint64_t>(chunk_chars),
+    renumber_mode
+  );
 }

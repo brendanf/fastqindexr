@@ -3,6 +3,7 @@
 S3method(print,fastqindexr_index)
 export(create_index)
 export(extract_sequences)
+export(extract_sequences_dnastringset)
 export(extract_sequences_to_file)
 export(make_benchmark_fasta)
 export(partition_seq_idx)

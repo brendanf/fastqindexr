@@ -7,6 +7,8 @@
 - Extend `extract_sequences_to_file()` with partitioned mode by passing a list
   to `seq_idx` and a matching vector to `outfile`. Supports scalar/vector
   `compress` and preserves strict-increasing fast-path behavior per partition.
+- Add `extract_sequences_dnastringset()` with chunked construction of
+  `Biostrings::DNAStringSet` for improved large-request memory behavior.
 
 ## 0.0.2
 

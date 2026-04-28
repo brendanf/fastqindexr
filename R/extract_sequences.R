@@ -481,3 +481,79 @@ extract_sequences_to_file <- function(
 
   invisible(normalizePath(outfile, winslash = "/", mustWork = FALSE))
 }
+
+#' Extract sequence records as a DNAStringSet
+#'
+#' Returns sequences as a `Biostrings::DNAStringSet` while preserving request
+#' order and duplicate IDs. Extraction is processed in chunks to keep memory
+#' usage bounded on large requests.
+#'
+#' @param index Either a `fastqindexr_index` object (from [create_index()] or
+#'   [read_fqi_index()]) or one or more `.fqi` file paths.
+#' @param seq_idx Numeric vector of record IDs (positive whole numbers).
+#' @param file Optional character vector of file paths overriding those stored
+#'   in `index$files` for object input.
+#' @param renumber Name handling for returned sequences: `"none"` keeps source
+#'   IDs, `"zero_based"` uses `"0"`, `"1"`, ..., and `"one_based"` uses
+#'   `"1"`, `"2"`, ....
+#' @param chunk_chars Approximate number of sequence characters to process per
+#'   chunk when building the return object. Larger values may reduce overhead
+#'   but increase temporary memory usage.
+#'
+#' @return A `Biostrings::DNAStringSet`.
+#'
+#' @export
+extract_sequences_dnastringset <- function(
+  index,
+  seq_idx,
+  file = NULL,
+  renumber = c("none", "zero_based", "one_based"),
+  chunk_chars = 1e7
+) {
+  if (!requireNamespace("Biostrings", quietly = TRUE)) {
+    stop("Package `Biostrings` is required.", call. = FALSE)
+  }
+  renumber <- match.arg(renumber)
+  if (
+    !is.numeric(chunk_chars) ||
+      length(chunk_chars) != 1L ||
+      is.na(chunk_chars) ||
+      chunk_chars <= 0
+  ) {
+    stop("`chunk_chars` must be a positive numeric scalar.", call. = FALSE)
+  }
+  resolved <- resolve_extract_index(index, file)
+  index <- validate_index(resolved$index)
+  live_index <- ensure_live_index_ptr(index)
+  index <- live_index$index
+  index_ptr <- live_index$ptr
+  n_records <- as.numeric(index$n_records)
+  if (length(seq_idx) < 1L) {
+    return(Biostrings::DNAStringSet(character()))
+  }
+  seq_idx <- validate_seq_idx(seq_idx = seq_idx, n_records = n_records)
+  files <- if (is.null(resolved$file)) {
+    as.character(index$files)
+  } else {
+    files <- validate_input_files(resolved$file)
+    if (length(files) != length(index$files)) {
+      stop(
+        paste0(
+          "Override `file` must contain the same number of files as ",
+          "index$files."
+        ),
+        call. = FALSE
+      )
+    }
+    files
+  }
+  # nolint nextline: object_usage_linter
+  cpp_extract_sequences_dnastringset(
+    files = files,
+    source_type = index$format,
+    ids_zero_based = as.numeric(seq_idx - 1),
+    index_ptr_sexp = index_ptr,
+    chunk_chars = as.numeric(chunk_chars),
+    renumber_mode = renumber
+  )
+}

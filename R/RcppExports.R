@@ -25,3 +25,7 @@ cpp_extract_sequences_to_file <- function(files, source_type, ids_zero_based, in
     .Call(`_fastqindexr_cpp_extract_sequences_to_file`, files, source_type, ids_zero_based, index_ptr_sexp, output_type, outfile, append, compress)
 }
 
+cpp_extract_sequences_dnastringset <- function(files, source_type, ids_zero_based, index_ptr_sexp, chunk_chars, renumber_mode) {
+    .Call(`_fastqindexr_cpp_extract_sequences_dnastringset`, files, source_type, ids_zero_based, index_ptr_sexp, chunk_chars, renumber_mode)
+}
+

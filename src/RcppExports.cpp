@@ -90,6 +90,22 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// cpp_extract_sequences_dnastringset
+SEXP cpp_extract_sequences_dnastringset(Rcpp::CharacterVector files, std::string source_type, Rcpp::NumericVector ids_zero_based, SEXP index_ptr_sexp, double chunk_chars, std::string renumber_mode);
+RcppExport SEXP _fastqindexr_cpp_extract_sequences_dnastringset(SEXP filesSEXP, SEXP source_typeSEXP, SEXP ids_zero_basedSEXP, SEXP index_ptr_sexpSEXP, SEXP chunk_charsSEXP, SEXP renumber_modeSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type files(filesSEXP);
+    Rcpp::traits::input_parameter< std::string >::type source_type(source_typeSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type ids_zero_based(ids_zero_basedSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type index_ptr_sexp(index_ptr_sexpSEXP);
+    Rcpp::traits::input_parameter< double >::type chunk_chars(chunk_charsSEXP);
+    Rcpp::traits::input_parameter< std::string >::type renumber_mode(renumber_modeSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_extract_sequences_dnastringset(files, source_type, ids_zero_based, index_ptr_sexp, chunk_chars, renumber_mode));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_fastqindexr_cpp_create_index", (DL_FUNC) &_fastqindexr_cpp_create_index, 2},
@@ -98,6 +114,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastqindexr_cpp_index_ptr_is_valid", (DL_FUNC) &_fastqindexr_cpp_index_ptr_is_valid, 1},
     {"_fastqindexr_cpp_extract_sequences", (DL_FUNC) &_fastqindexr_cpp_extract_sequences, 5},
     {"_fastqindexr_cpp_extract_sequences_to_file", (DL_FUNC) &_fastqindexr_cpp_extract_sequences_to_file, 8},
+    {"_fastqindexr_cpp_extract_sequences_dnastringset", (DL_FUNC) &_fastqindexr_cpp_extract_sequences_dnastringset, 6},
     {NULL, NULL, 0}
 };
 
