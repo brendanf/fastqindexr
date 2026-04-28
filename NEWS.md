@@ -1,8 +1,7 @@
-# fastqindexr
-
-## Development
+# fastqindexr (development version)
 
 - Fix a bug reading certain .fqi indexes written by FastqIndEx.
+- Fix a bug when reusing the same index for many small extractions.
 
 ## 0.0.2
 

@@ -540,7 +540,16 @@ SelectedRecordMap collectRequestedRecords(
           line_start,
           line_count
         );
+        if (lines.size() % static_cast<std::size_t>(bundle.record_size) != 0) {
+          throw std::runtime_error("Malformed extracted line count for region.");
+        }
+        const std::size_t expected_records = static_cast<std::size_t>(
+          region_end - region_start + 1
+        );
         std::size_t extracted_records = lines.size() / static_cast<std::size_t>(bundle.record_size);
+        if (extracted_records < expected_records) {
+          throw std::runtime_error("Partial extraction for requested region.");
+        }
         for (std::size_t r = 0; r < extracted_records; ++r) {
           std::uint64_t local_id = region_start + static_cast<std::uint64_t>(r);
           if (requested_set.find(local_id) == requested_set.end()) {
@@ -731,8 +740,17 @@ double streamSortedUniqueToFile(
           line_start,
           line_count
         );
+        if (lines.size() % static_cast<std::size_t>(bundle.record_size) != 0) {
+          throw std::runtime_error("Malformed extracted line count for region.");
+        }
+        const std::size_t expected_records = static_cast<std::size_t>(
+          region_end - region_start + 1
+        );
         const std::size_t extracted_records =
           lines.size() / static_cast<std::size_t>(bundle.record_size);
+        if (extracted_records < expected_records) {
+          throw std::runtime_error("Partial extraction for requested region.");
+        }
         for (std::size_t r = 0; r < extracted_records; ++r) {
           const std::uint64_t rec_local = region_start + static_cast<std::uint64_t>(r);
           if (requested_set.find(rec_local) == requested_set.end()) {
