@@ -9,6 +9,7 @@
 #include "../base/ZLibBasedFASTQProcessorBaseClass.h"
 
 #include <cstdint>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,17 @@ class Indexer : public ZLibBasedFASTQProcessorBaseClass {
   FileIndex createIndex(const std::string& gz_file_path);
 
  private:
+  bool checkAndPrepareForNextConcatenatedPart(
+    std::ifstream* in,
+    z_stream* strm,
+    std::vector<unsigned char>* window,
+    std::vector<unsigned char>* input,
+    bool* first_pass,
+    bool* last_block_ended_with_newline,
+    std::string* current_block,
+    std::uint64_t total_bytes_in
+  );
+
   void finalizeProcessingForCurrentBlock(
     const std::string& current_block,
     std::uint64_t block_offset,

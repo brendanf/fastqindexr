@@ -5,7 +5,9 @@
 #include "Extractor.h"
 
 #include <algorithm>
+#include <cstring>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
 
 namespace fastqindex_core {
@@ -18,18 +20,23 @@ bool prepareForNextConcatenatedMember(
   z_stream* strm,
   std::vector<unsigned char>* window,
   std::vector<unsigned char>* input,
-  bool* first_pass
+  bool* first_pass,
+  std::uint64_t total_bytes_in
 ) {
   if (in == nullptr || strm == nullptr || window == nullptr || input == nullptr || first_pass == nullptr) {
     return false;
   }
-  int peek = in->peek();
-  if (peek == EOF) {
+  // fastqindexr change: follow upstream offset rule (`+8+10`) before attempting
+  // to continue in a concatenated gzip member.
+  const std::uint64_t stream_end_position = total_bytes_in + 18;
+  in->seekg(static_cast<std::streamoff>(stream_end_position), std::ios::beg);
+  if (!in->good()) {
     return false;
   }
 
   inflateEnd(strm);
-  if (!ZLibBasedFASTQProcessorBaseClass::initializeZStream(strm, -15)) {
+  std::memset(strm, 0, sizeof(z_stream));
+  if (inflateInit2(strm, -15) != Z_OK) {
     return false;
   }
   std::fill(window->begin(), window->end(), 0);
@@ -148,6 +155,7 @@ std::vector<std::string> Extractor::extract(
 
   std::uint64_t skip = starting_line - entry->starting_line_in_entry;
   std::uint64_t extracted_lines = 0;
+  std::uint64_t total_bytes_in = initial_offset;
   std::string incomplete_last_line;
   bool first_pass = true;
   std::vector<std::string> out;
@@ -167,7 +175,10 @@ std::vector<std::string> Extractor::extract(
       }
 
       std::uint64_t before_out = strm.avail_out;
+      std::uint64_t before_in = strm.avail_in;
       int zlib_result = inflate(&strm, Z_NO_FLUSH);
+      const std::uint64_t read_bytes = before_in - strm.avail_in;
+      total_bytes_in += read_bytes;
       std::uint64_t written = before_out - strm.avail_out;
       std::string chunk(reinterpret_cast<char*>(window.data() + (WINDOW_SIZE - before_out)), written);
 
@@ -208,14 +219,33 @@ std::vector<std::string> Extractor::extract(
       }
       if (zlib_result == Z_NEED_DICT || zlib_result == Z_DATA_ERROR || zlib_result == Z_MEM_ERROR) {
         inflateEnd(&strm);
-        throw std::runtime_error("zlib extraction error.");
+        std::ostringstream oss;
+        oss
+          << "zlib extraction error (code=" << zlib_result
+          << ", msg=" << (strm.msg == nullptr ? "none" : strm.msg)
+          << ", start_line=" << starting_line
+          << ", line_count=" << line_count
+          << ", entry_start_line=" << entry->starting_line_in_entry
+          << ", block_offset=" << entry->block_offset_in_raw_file
+          << ", bits=" << static_cast<int>(entry->bits)
+          << ", dict_compressed_size=" << static_cast<int>(entry->compressed_dictionary_size)
+          << ").";
+        throw std::runtime_error(oss.str());
       }
     } while (strm.avail_in != 0 && extracted_lines < line_count);
 
     if (stream_ended && extracted_lines < line_count) {
-      if (!prepareForNextConcatenatedMember(&in, &strm, &window, &input, &first_pass)) {
+      if (!prepareForNextConcatenatedMember(
+            &in,
+            &strm,
+            &window,
+            &input,
+            &first_pass,
+            total_bytes_in
+          )) {
         break;
       }
+      total_bytes_in += 18;
     }
   }
 
