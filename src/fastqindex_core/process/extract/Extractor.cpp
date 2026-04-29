@@ -10,6 +10,40 @@
 
 namespace fastqindex_core {
 
+// fastqindexr change (adapted from upstream Extractor::prepareForNextConcatenatedPartIfNecessary):
+// Reinitialize raw inflate state after Z_STREAM_END so extraction can continue
+// into concatenated gzip members when more lines are requested.
+bool prepareForNextConcatenatedMember(
+  std::ifstream* in,
+  z_stream* strm,
+  std::vector<unsigned char>* window,
+  std::vector<unsigned char>* input,
+  bool* first_pass
+) {
+  if (in == nullptr || strm == nullptr || window == nullptr || input == nullptr || first_pass == nullptr) {
+    return false;
+  }
+  int peek = in->peek();
+  if (peek == EOF) {
+    return false;
+  }
+
+  inflateEnd(strm);
+  if (!ZLibBasedFASTQProcessorBaseClass::initializeZStream(strm, -15)) {
+    return false;
+  }
+  std::fill(window->begin(), window->end(), 0);
+  std::fill(input->begin(), input->end(), 0);
+  strm->avail_out = WINDOW_SIZE;
+  strm->next_out = window->data();
+  unsigned char dict[WINDOW_SIZE]{0};
+  if (inflateSetDictionary(strm, dict, WINDOW_SIZE) != Z_OK) {
+    return false;
+  }
+  *first_pass = true;
+  return true;
+}
+
 const IndexEntry* Extractor::findIndexEntryForExtraction(
   const std::vector<IndexEntry>& entries,
   std::uint64_t starting_line
@@ -125,6 +159,7 @@ std::vector<std::string> Extractor::extract(
       break;
     }
 
+    bool stream_ended = false;
     do {
       if (strm.avail_out == 0) {
         strm.avail_out = WINDOW_SIZE;
@@ -168,6 +203,7 @@ std::vector<std::string> Extractor::extract(
       incomplete_last_line = cur_incomplete;
 
       if (zlib_result == Z_STREAM_END) {
+        stream_ended = true;
         break;
       }
       if (zlib_result == Z_NEED_DICT || zlib_result == Z_DATA_ERROR || zlib_result == Z_MEM_ERROR) {
@@ -175,6 +211,12 @@ std::vector<std::string> Extractor::extract(
         throw std::runtime_error("zlib extraction error.");
       }
     } while (strm.avail_in != 0 && extracted_lines < line_count);
+
+    if (stream_ended && extracted_lines < line_count) {
+      if (!prepareForNextConcatenatedMember(&in, &strm, &window, &input, &first_pass)) {
+        break;
+      }
+    }
   }
 
   inflateEnd(&strm);

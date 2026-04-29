@@ -85,6 +85,76 @@ create_empty_extract_file <- function(path, compress) {
   close(con)
 }
 
+#' @noRd
+resolve_region_merge_tuning <- function() {
+  bridge_gap <- getOption("fastqindexr.max_bridge_gap", 64)
+  region_bytes <- getOption("fastqindexr.max_region_bytes", 2147483647)
+  extract_mode <- getOption("fastqindexr.extract_mode", "indexed")
+  diagnostics <- getOption("fastqindexr.extract_diagnostics", FALSE)
+
+  if (
+    !is.numeric(bridge_gap) ||
+      length(bridge_gap) != 1L ||
+      is.na(bridge_gap) ||
+      !is.finite(bridge_gap) ||
+      bridge_gap < 0 ||
+      bridge_gap != floor(bridge_gap)
+  ) {
+    stop(
+      paste0(
+        "Option `fastqindexr.max_bridge_gap` must be a finite ",
+        "non-negative whole number."
+      ),
+      call. = FALSE
+    )
+  }
+  if (
+    !is.numeric(region_bytes) ||
+      length(region_bytes) != 1L ||
+      is.na(region_bytes) ||
+      !is.finite(region_bytes) ||
+      region_bytes <= 0 ||
+      region_bytes != floor(region_bytes)
+  ) {
+    stop(
+      paste0(
+        "Option `fastqindexr.max_region_bytes` must be a finite ",
+        "positive whole number."
+      ),
+      call. = FALSE
+    )
+  }
+  if (
+    !is.character(extract_mode) ||
+      length(extract_mode) != 1L ||
+      is.na(extract_mode) ||
+      !(extract_mode %in% c("indexed", "sequential_only"))
+  ) {
+    stop(
+      paste0(
+        "Option `fastqindexr.extract_mode` must be one of ",
+        "`\"indexed\"` or `\"sequential_only\"`."
+      ),
+      call. = FALSE
+    )
+  }
+  if (
+    !is.logical(diagnostics) || length(diagnostics) != 1L || is.na(diagnostics)
+  ) {
+    stop(
+      "Option `fastqindexr.extract_diagnostics` must be TRUE or FALSE.",
+      call. = FALSE
+    )
+  }
+
+  list(
+    max_bridge_gap = as.numeric(bridge_gap),
+    max_region_bytes = as.numeric(region_bytes),
+    extract_mode = extract_mode,
+    diagnostics = diagnostics
+  )
+}
+
 #' Partition sequence IDs into stable batches
 #'
 #' Splits a numeric vector of 1-based sequence IDs into `n_parts` partitions
@@ -221,6 +291,7 @@ extract_sequences <- function(
   return = c("data.frame", "list", "seq")
 ) {
   return <- match.arg(return)
+  tuning <- resolve_region_merge_tuning()
   resolved <- resolve_extract_index(index, file)
   index <- resolved$index
   file <- resolved$file
@@ -288,41 +359,63 @@ extract_sequences <- function(
     type = index$format,
     ids_zero_based = as.numeric(seq_idx - 1),
     index_ptr_sexp = index_ptr,
-    include_qual = include_qual
+    include_qual = include_qual,
+    max_bridge_gap = tuning$max_bridge_gap,
+    max_region_bytes = tuning$max_region_bytes,
+    extract_mode = tuning$extract_mode,
+    diagnostics = tuning$diagnostics
   )
+  diag <- attr(result, "fastqindexr_diagnostics", exact = TRUE)
 
   if (return == "data.frame") {
     if (is_fastq) {
       return(
-        data.frame(
-          seq_id = result$seq_id,
-          seq = result$seq,
-          qual = result$qual,
-          stringsAsFactors = FALSE
+        structure(
+          data.frame(
+            seq_id = result$seq_id,
+            seq = result$seq,
+            qual = result$qual,
+            stringsAsFactors = FALSE
+          ),
+          fastqindexr_diagnostics = diag
         )
       )
     }
     return(
-      data.frame(
-        seq_id = result$seq_id,
-        seq = result$seq,
-        stringsAsFactors = FALSE
+      structure(
+        data.frame(
+          seq_id = result$seq_id,
+          seq = result$seq,
+          stringsAsFactors = FALSE
+        ),
+        fastqindexr_diagnostics = diag
       )
     )
   }
   if (return == "list") {
     if (is_fastq) {
       return(
-        list(
-          seq_id = result$seq_id,
-          seq = result$seq,
-          qual = result$qual
+        structure(
+          list(
+            seq_id = result$seq_id,
+            seq = result$seq,
+            qual = result$qual
+          ),
+          fastqindexr_diagnostics = diag
         )
       )
     }
-    return(list(seq_id = result$seq_id, seq = result$seq))
+    return(
+      structure(
+        list(seq_id = result$seq_id, seq = result$seq),
+        fastqindexr_diagnostics = diag
+      )
+    )
   }
-  stats::setNames(result$seq, result$seq_id)
+  structure(
+    stats::setNames(result$seq, result$seq_id),
+    fastqindexr_diagnostics = diag
+  )
 }
 
 #' Extract sequence records by ID and stream directly to file
@@ -371,6 +464,7 @@ extract_sequences_to_file <- function(
   append = FALSE,
   compress = endsWith(tolower(outfile), ".gz")
 ) {
+  tuning <- resolve_region_merge_tuning()
   resolved <- resolve_extract_index(index, file)
   index <- resolved$index
   file <- resolved$file
@@ -446,7 +540,7 @@ extract_sequences_to_file <- function(
         arg_name = "`seq_idx` partition"
       )
       # nolint nextline: object_usage_linter
-      cpp_extract_sequences_to_file(
+      res <- cpp_extract_sequences_to_file(
         files = files,
         source_type = index$format,
         ids_zero_based = as.numeric(ids_i - 1),
@@ -454,8 +548,19 @@ extract_sequences_to_file <- function(
         output_type = type,
         outfile = outfile[i],
         append = append,
-        compress = compress_vec[i]
+        compress = compress_vec[i],
+        max_bridge_gap = tuning$max_bridge_gap,
+        max_region_bytes = tuning$max_region_bytes,
+        extract_mode = tuning$extract_mode,
+        diagnostics = tuning$diagnostics
       )
+      if (isTRUE(tuning$diagnostics)) {
+        attr(out_norm, "fastqindexr_diagnostics") <- attr(
+          res,
+          "fastqindexr_diagnostics",
+          exact = TRUE
+        )
+      }
     }
     return(invisible(out_norm))
   }
@@ -468,7 +573,7 @@ extract_sequences_to_file <- function(
   }
   seq_idx <- validate_seq_idx(seq_idx = seq_idx, n_records = n_records)
   # nolint nextline: object_usage_linter
-  cpp_extract_sequences_to_file(
+  res <- cpp_extract_sequences_to_file(
     files = files,
     source_type = index$format,
     ids_zero_based = as.numeric(seq_idx - 1),
@@ -476,10 +581,22 @@ extract_sequences_to_file <- function(
     output_type = type,
     outfile = outfile,
     append = append,
-    compress = compress
+    compress = compress,
+    max_bridge_gap = tuning$max_bridge_gap,
+    max_region_bytes = tuning$max_region_bytes,
+    extract_mode = tuning$extract_mode,
+    diagnostics = tuning$diagnostics
   )
+  out_norm <- normalizePath(outfile, winslash = "/", mustWork = FALSE)
+  if (isTRUE(tuning$diagnostics)) {
+    attr(out_norm, "fastqindexr_diagnostics") <- attr(
+      res,
+      "fastqindexr_diagnostics",
+      exact = TRUE
+    )
+  }
 
-  invisible(normalizePath(outfile, winslash = "/", mustWork = FALSE))
+  invisible(out_norm)
 }
 
 #' Extract sequence records as a DNAStringSet
@@ -515,6 +632,7 @@ extract_sequences_dnastringset <- function(
     stop("Package `Biostrings` is required.", call. = FALSE)
   }
   renumber <- match.arg(renumber)
+  tuning <- resolve_region_merge_tuning()
   if (
     !is.numeric(chunk_chars) ||
       length(chunk_chars) != 1L ||
@@ -559,6 +677,10 @@ extract_sequences_dnastringset <- function(
     ids_zero_based = as.numeric(seq_idx - 1),
     index_ptr_sexp = index_ptr,
     chunk_chars = as.numeric(chunk_chars),
+    max_bridge_gap = tuning$max_bridge_gap,
+    max_region_bytes = tuning$max_region_bytes,
+    extract_mode = tuning$extract_mode,
+    diagnostics = tuning$diagnostics,
     renumber_mode = renumber
   )
 }

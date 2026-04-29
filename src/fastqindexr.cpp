@@ -28,7 +28,6 @@
 namespace {
 
 constexpr int kGzBufferSize = 8192;
-constexpr std::uint64_t kDenseGap = 64;
 
 struct ParsedRecord {
   std::string id;
@@ -110,6 +109,29 @@ class GzipOutputWriter : public OutputWriter {
 };
 
 using SelectedRecordMap = std::unordered_map<std::uint64_t, ParsedRecord>;
+
+enum class ExtractExecutionMode {
+  Indexed = 0,
+  SequentialOnly = 1
+};
+
+struct ExtractionDiagnostics {
+  std::uint64_t regions_planned{0};
+  std::uint64_t extract_attempts{0};
+  std::uint64_t extract_failures{0};
+  std::uint64_t fallback_invocations{0};
+  std::uint64_t fallback_records{0};
+};
+
+Rcpp::List diagnosticsToList(const ExtractionDiagnostics& diag) {
+  return Rcpp::List::create(
+    Rcpp::Named("regions_planned") = static_cast<double>(diag.regions_planned),
+    Rcpp::Named("extract_attempts") = static_cast<double>(diag.extract_attempts),
+    Rcpp::Named("extract_failures") = static_cast<double>(diag.extract_failures),
+    Rcpp::Named("fallback_invocations") = static_cast<double>(diag.fallback_invocations),
+    Rcpp::Named("fallback_records") = static_cast<double>(diag.fallback_records)
+  );
+}
 
 std::uint64_t asUInt64(double value, const std::string& field) {
   if (!std::isfinite(value) || value < 0) {
@@ -374,16 +396,27 @@ std::uint64_t countGzLines(const std::string& path) {
 }
 
 std::vector<std::pair<std::uint64_t, std::uint64_t>> buildDenseRegionsFromSortedUnique(
-  const std::vector<std::uint64_t>& ids
+  const std::vector<std::uint64_t>& ids,
+  std::uint64_t max_bridge_gap,
+  std::uint64_t max_region_bytes,
+  int record_size,
+  ExtractionDiagnostics* diag
 ) {
   std::vector<std::pair<std::uint64_t, std::uint64_t>> regions;
   if (ids.empty()) {
     return regions;
   }
+  if (record_size <= 0) {
+    throw std::runtime_error("Invalid record size for region planning.");
+  }
   std::uint64_t start = ids[0];
   std::uint64_t last = ids[0];
+  const std::uint64_t bytes_per_record = static_cast<std::uint64_t>(record_size);
   for (size_t i = 1; i < ids.size(); ++i) {
-    if (ids[i] <= last + kDenseGap + 1) {
+    const bool within_gap = (ids[i] <= last + max_bridge_gap + 1);
+    const std::uint64_t span_records = ids[i] - start + 1;
+    const bool within_bytes = (span_records <= max_region_bytes / bytes_per_record);
+    if (within_gap && within_bytes) {
       last = ids[i];
     } else {
       regions.emplace_back(start, last);
@@ -392,16 +425,31 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> buildDenseRegionsFromSorted
     }
   }
   regions.emplace_back(start, last);
+  if (diag != nullptr) {
+    diag->regions_planned += static_cast<std::uint64_t>(regions.size());
+  }
   return regions;
 }
 
-std::vector<std::pair<std::uint64_t, std::uint64_t>> denseRegions(std::vector<std::uint64_t> ids) {
+std::vector<std::pair<std::uint64_t, std::uint64_t>> denseRegions(
+  std::vector<std::uint64_t> ids,
+  std::uint64_t max_bridge_gap,
+  std::uint64_t max_region_bytes,
+  int record_size,
+  ExtractionDiagnostics* diag
+) {
   if (ids.empty()) {
     return {};
   }
   std::sort(ids.begin(), ids.end());
   ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
-  return buildDenseRegionsFromSortedUnique(ids);
+  return buildDenseRegionsFromSortedUnique(
+    ids,
+    max_bridge_gap,
+    max_region_bytes,
+    record_size,
+    diag
+  );
 }
 
 ParsedRecord parseRecordFromFixedLines(
@@ -432,8 +480,12 @@ void sequentialFallbackCollect(
   const std::unordered_set<std::uint64_t>& requested_local_ids,
   std::uint64_t global_offset,
   std::unordered_map<std::uint64_t, ParsedRecord>* selected_global,
-  bool include_qual
+  bool include_qual,
+  ExtractionDiagnostics* diag
 ) {
+  if (diag != nullptr) {
+    diag->fallback_invocations++;
+  }
   gzFile stream = gzopen(file.c_str(), "rb");
   if (stream == nullptr) {
     throw std::runtime_error("Fallback parser could not open file: " + file);
@@ -453,6 +505,9 @@ void sequentialFallbackCollect(
       if (requested_local_ids.find(local_id) != requested_local_ids.end()) {
         const std::string& q = include_qual ? d : "";
         (*selected_global)[global_offset + local_id] = ParsedRecord{trimPrefix(a, '@'), b, q};
+        if (diag != nullptr) {
+          diag->fallback_records++;
+        }
       }
       local_id++;
     }
@@ -463,6 +518,9 @@ void sequentialFallbackCollect(
       }
       if (requested_local_ids.find(local_id) != requested_local_ids.end()) {
         (*selected_global)[global_offset + local_id] = ParsedRecord{trimPrefix(a, '>'), b, ""};
+        if (diag != nullptr) {
+          diag->fallback_records++;
+        }
       }
       local_id++;
     }
@@ -479,6 +537,30 @@ std::vector<std::uint64_t> parseRequestedIds(const Rcpp::NumericVector& ids_zero
   return requested;
 }
 
+std::uint64_t parseNonNegativeWhole(double value, const std::string& field) {
+  if (!std::isfinite(value) || value < 0.0 || std::floor(value) != value) {
+    throw std::runtime_error("`" + field + "` must be a non-negative whole number.");
+  }
+  return static_cast<std::uint64_t>(value);
+}
+
+std::uint64_t parsePositiveWhole(double value, const std::string& field) {
+  if (!std::isfinite(value) || value <= 0.0 || std::floor(value) != value) {
+    throw std::runtime_error("`" + field + "` must be a positive whole number.");
+  }
+  return static_cast<std::uint64_t>(value);
+}
+
+ExtractExecutionMode parseExtractExecutionMode(const std::string& mode) {
+  if (mode == "indexed") {
+    return ExtractExecutionMode::Indexed;
+  }
+  if (mode == "sequential_only") {
+    return ExtractExecutionMode::SequentialOnly;
+  }
+  throw std::runtime_error("`extract_mode` must be 'indexed' or 'sequential_only'.");
+}
+
 bool requestIsSortedUnique(const std::vector<std::uint64_t>& requested) {
   if (requested.size() <= 1) {
     return true;
@@ -493,7 +575,11 @@ SelectedRecordMap collectRequestedRecords(
   const Rcpp::CharacterVector& files,
   const IndexBundle& bundle,
   const std::vector<std::uint64_t>& requested,
-  bool include_qual
+  bool include_qual,
+  std::uint64_t max_bridge_gap,
+  std::uint64_t max_region_bytes,
+  ExtractExecutionMode mode,
+  ExtractionDiagnostics* diag
 ) {
   const bool need_qual = (bundle.format == "fastq" && include_qual);
   const bool sorted_unique = requestIsSortedUnique(requested);
@@ -525,7 +611,25 @@ SelectedRecordMap collectRequestedRecords(
       local_ids.erase(std::unique(local_ids.begin(), local_ids.end()), local_ids.end());
     }
     std::unordered_set<std::uint64_t> requested_set(local_ids.begin(), local_ids.end());
-    auto regions = denseRegions(local_ids);
+    if (mode == ExtractExecutionMode::SequentialOnly) {
+      sequentialFallbackCollect(
+        Rcpp::as<std::string>(files[file_idx]),
+        bundle.format,
+        requested_set,
+        bundle.record_offsets[file_idx],
+        &selected_global,
+        need_qual,
+        diag
+      );
+      continue;
+    }
+    auto regions = denseRegions(
+      local_ids,
+      max_bridge_gap,
+      max_region_bytes,
+      bundle.record_size,
+      diag
+    );
     for (const auto& rg : regions) {
       std::uint64_t region_start = rg.first;
       std::uint64_t region_end = rg.second;
@@ -534,6 +638,9 @@ SelectedRecordMap collectRequestedRecords(
         (region_end - region_start + 1) * static_cast<std::uint64_t>(bundle.record_size);
 
       try {
+        if (diag != nullptr) {
+          diag->extract_attempts++;
+        }
         std::vector<std::string> lines = extractor.extract(
           Rcpp::as<std::string>(files[file_idx]),
           bundle.indexed_files[file_idx].index.entries,
@@ -565,6 +672,9 @@ SelectedRecordMap collectRequestedRecords(
           selected_global[global_id] = std::move(rec);
         }
       } catch (...) {
+        if (diag != nullptr) {
+          diag->extract_failures++;
+        }
         // fastqindexr change: Fallback preserves correctness when random-seek
         // extraction fails for particular gzip layouts.
         sequentialFallbackCollect(
@@ -573,8 +683,10 @@ SelectedRecordMap collectRequestedRecords(
           requested_set,
           bundle.record_offsets[file_idx],
           &selected_global,
-          need_qual
+          need_qual,
+          diag
         );
+        break;
       }
     }
   }
@@ -620,8 +732,12 @@ std::uint64_t sequentialFallbackStreamToFile(
   const std::unordered_set<std::uint64_t>& requested_local_ids,
   bool need_qual,
   const std::string& output_type,
-  OutputWriter* writer
+  OutputWriter* writer,
+  ExtractionDiagnostics* diag
 ) {
+  if (diag != nullptr) {
+    diag->fallback_invocations++;
+  }
   std::uint64_t count = 0;
   gzFile stream = gzopen(file.c_str(), "rb");
   if (stream == nullptr) {
@@ -644,6 +760,9 @@ std::uint64_t sequentialFallbackStreamToFile(
         const ParsedRecord rec{trimPrefix(a, '@'), b, q};
         writer->write(renderRecord(rec, output_type));
         count++;
+        if (diag != nullptr) {
+          diag->fallback_records++;
+        }
       }
       local_id++;
     }
@@ -656,6 +775,9 @@ std::uint64_t sequentialFallbackStreamToFile(
         const ParsedRecord rec{trimPrefix(a, '>'), b, ""};
         writer->write(renderRecord(rec, output_type));
         count++;
+        if (diag != nullptr) {
+          diag->fallback_records++;
+        }
       }
       local_id++;
     }
@@ -671,11 +793,22 @@ double fullCollectAndRewriteToFile(
   const std::vector<std::uint64_t>& requested,
   const std::string& resolved_output_type,
   const std::string& outfile,
-  bool compress
+  bool compress,
+  std::uint64_t max_bridge_gap,
+  std::uint64_t max_region_bytes,
+  ExtractExecutionMode mode,
+  ExtractionDiagnostics* diag
 ) {
   const bool include_qual = (resolved_output_type == "fastq");
   const SelectedRecordMap selected_global = collectRequestedRecords(
-    files, bundle, requested, include_qual
+    files,
+    bundle,
+    requested,
+    include_qual,
+    max_bridge_gap,
+    max_region_bytes,
+    mode,
+    diag
   );
   std::unique_ptr<OutputWriter> writer = makeOutputWriter(outfile, false, compress);
   std::uint64_t written = 0;
@@ -696,7 +829,11 @@ double streamSortedUniqueToFile(
   const std::vector<std::uint64_t>& requested,
   const std::string& resolved_output_type,
   const std::string& outfile,
-  bool compress
+  bool compress,
+  std::uint64_t max_bridge_gap,
+  std::uint64_t max_region_bytes,
+  ExtractExecutionMode mode,
+  ExtractionDiagnostics* diag
 ) {
   const bool include_qual = (resolved_output_type == "fastq");
   const bool need_qual = (bundle.format == "fastq" && include_qual);
@@ -724,7 +861,25 @@ double streamSortedUniqueToFile(
       continue;
     }
     const std::unordered_set<std::uint64_t> requested_set(local_ids.begin(), local_ids.end());
-    const auto regions = buildDenseRegionsFromSortedUnique(local_ids);
+    if (mode == ExtractExecutionMode::SequentialOnly) {
+      n_written += sequentialFallbackStreamToFile(
+        Rcpp::as<std::string>(files[file_idx]),
+        bundle.format,
+        requested_set,
+        need_qual,
+        resolved_output_type,
+        writer.get(),
+        diag
+      );
+      continue;
+    }
+    const auto regions = buildDenseRegionsFromSortedUnique(
+      local_ids,
+      max_bridge_gap,
+      max_region_bytes,
+      bundle.record_size,
+      diag
+    );
     bool wrote_in_this_file = false;
 
     for (const auto& rg : regions) {
@@ -734,6 +889,9 @@ double streamSortedUniqueToFile(
       const std::uint64_t line_count =
         (region_end - region_start + 1) * static_cast<std::uint64_t>(bundle.record_size);
       try {
+        if (diag != nullptr) {
+          diag->extract_attempts++;
+        }
         std::vector<std::string> lines = extractor.extract(
           Rcpp::as<std::string>(files[file_idx]),
           bundle.indexed_files[file_idx].index.entries,
@@ -767,6 +925,9 @@ double streamSortedUniqueToFile(
           n_written++;
         }
       } catch (...) {
+        if (diag != nullptr) {
+          diag->extract_failures++;
+        }
         if (!wrote_in_this_file) {
           n_written += sequentialFallbackStreamToFile(
             Rcpp::as<std::string>(files[file_idx]),
@@ -774,11 +935,21 @@ double streamSortedUniqueToFile(
             requested_set,
             need_qual,
             resolved_output_type,
-            writer.get()
+            writer.get(),
+            diag
           );
         } else {
           return fullCollectAndRewriteToFile(
-            files, bundle, requested, resolved_output_type, outfile, compress
+            files,
+            bundle,
+            requested,
+            resolved_output_type,
+            outfile,
+            compress,
+            max_bridge_gap,
+            max_region_bytes,
+            mode,
+            diag
           );
         }
         break;
@@ -868,7 +1039,11 @@ SEXP buildDNAStringSetFromRequested(
   const IndexBundle& bundle,
   const std::vector<std::uint64_t>& requested,
   std::uint64_t chunk_chars_limit,
-  const std::string& renumber_mode
+  const std::string& renumber_mode,
+  std::uint64_t max_bridge_gap,
+  std::uint64_t max_region_bytes,
+  ExtractExecutionMode mode,
+  ExtractionDiagnostics* diag
 ) {
   const bool sorted_unique = requestIsSortedUnique(requested);
   std::vector<std::string> seq_chunk;
@@ -881,7 +1056,14 @@ SEXP buildDNAStringSetFromRequested(
 
   if (!sorted_unique) {
     const SelectedRecordMap selected_global = collectRequestedRecords(
-      files, bundle, requested, false
+      files,
+      bundle,
+      requested,
+      false,
+      max_bridge_gap,
+      max_region_bytes,
+      mode,
+      diag
     );
     for (auto gid : requested) {
       auto it = selected_global.find(gid);
@@ -921,7 +1103,43 @@ SEXP buildDNAStringSetFromRequested(
         continue;
       }
       const std::unordered_set<std::uint64_t> requested_set(local_ids.begin(), local_ids.end());
-      const auto regions = buildDenseRegionsFromSortedUnique(local_ids);
+      if (mode == ExtractExecutionMode::SequentialOnly) {
+        std::unordered_map<std::uint64_t, ParsedRecord> selected_global;
+        sequentialFallbackCollect(
+          Rcpp::as<std::string>(files[file_idx]),
+          bundle.format,
+          requested_set,
+          bundle.record_offsets[file_idx],
+          &selected_global,
+          false,
+          diag
+        );
+        for (auto rec_local : local_ids) {
+          const std::uint64_t gid = bundle.record_offsets[file_idx] + rec_local;
+          auto it = selected_global.find(gid);
+          if (it == selected_global.end()) {
+            throw std::runtime_error("Could not resolve all requested ids with provided index/files.");
+          }
+          appendRecordToDNAChunks(
+            it->second,
+            chunk_chars_limit,
+            &seq_chunk,
+            &id_chunk,
+            &chunk_chars,
+            &output_index,
+            &dna_chunks,
+            renumber_mode
+          );
+        }
+        continue;
+      }
+      const auto regions = buildDenseRegionsFromSortedUnique(
+        local_ids,
+        max_bridge_gap,
+        max_region_bytes,
+        bundle.record_size,
+        diag
+      );
       bool fell_back = false;
 
       for (const auto& rg : regions) {
@@ -931,6 +1149,9 @@ SEXP buildDNAStringSetFromRequested(
         const std::uint64_t line_count =
           (region_end - region_start + 1) * static_cast<std::uint64_t>(bundle.record_size);
         try {
+          if (diag != nullptr) {
+            diag->extract_attempts++;
+          }
           std::vector<std::string> lines = extractor.extract(
             Rcpp::as<std::string>(files[file_idx]),
             bundle.indexed_files[file_idx].index.entries,
@@ -971,6 +1192,9 @@ SEXP buildDNAStringSetFromRequested(
             );
           }
         } catch (...) {
+          if (diag != nullptr) {
+            diag->extract_failures++;
+          }
           fell_back = true;
           break;
         }
@@ -984,7 +1208,8 @@ SEXP buildDNAStringSetFromRequested(
           requested_set,
           bundle.record_offsets[file_idx],
           &selected_global,
-          false
+          false,
+          diag
         );
         for (auto rec_local : local_ids) {
           const std::uint64_t gid = bundle.record_offsets[file_idx] + rec_local;
@@ -1179,7 +1404,11 @@ Rcpp::List cpp_extract_sequences(
   std::string type,
   Rcpp::NumericVector ids_zero_based,
   SEXP index_ptr_sexp,
-  bool include_qual
+  bool include_qual,
+  double max_bridge_gap,
+  double max_region_bytes,
+  std::string extract_mode,
+  bool diagnostics
 ) {
   if (!cpp_index_ptr_is_valid(index_ptr_sexp)) {
     throw std::runtime_error("Invalid index pointer; recreate from serialized payload.");
@@ -1192,6 +1421,11 @@ Rcpp::List cpp_extract_sequences(
   if (static_cast<size_t>(files.size()) != bundle.files.size()) {
     throw std::runtime_error("Override `file` must contain same file count as index.");
   }
+  const std::uint64_t bridge_gap = parseNonNegativeWhole(max_bridge_gap, "max_bridge_gap");
+  const std::uint64_t region_bytes = parsePositiveWhole(max_region_bytes, "max_region_bytes");
+  const ExtractExecutionMode mode = parseExtractExecutionMode(extract_mode);
+  ExtractionDiagnostics diag;
+  ExtractionDiagnostics* diag_ptr = diagnostics ? &diag : nullptr;
 
   const bool return_qual = (bundle.format == "fastq" && include_qual);
   if (ids_zero_based.size() < 1) {
@@ -1238,7 +1472,14 @@ Rcpp::List cpp_extract_sequences(
       unique_ids.begin() + static_cast<std::ptrdiff_t>(end)
     );
     const SelectedRecordMap selected_chunk = collectRequestedRecords(
-      files, bundle, chunk_ids, need_parsed_qual
+      files,
+      bundle,
+      chunk_ids,
+      need_parsed_qual,
+      bridge_gap,
+      region_bytes,
+      mode,
+      diag_ptr
     );
     for (std::uint64_t gid : chunk_ids) {
       auto rec_it = selected_chunk.find(gid);
@@ -1268,20 +1509,28 @@ Rcpp::List cpp_extract_sequences(
   }
 
   if (return_qual) {
-    return Rcpp::List::create(
+    Rcpp::List out = Rcpp::List::create(
       Rcpp::Named("seq_id") = out_id,
       Rcpp::Named("seq") = out_seq,
       Rcpp::Named("qual") = out_qual
     );
+    if (diagnostics) {
+      out.attr("fastqindexr_diagnostics") = diagnosticsToList(diag);
+    }
+    return out;
   }
-  return Rcpp::List::create(
+  Rcpp::List out = Rcpp::List::create(
     Rcpp::Named("seq_id") = out_id,
     Rcpp::Named("seq") = out_seq
   );
+  if (diagnostics) {
+    out.attr("fastqindexr_diagnostics") = diagnosticsToList(diag);
+  }
+  return out;
 }
 
 // [[Rcpp::export]]
-double cpp_extract_sequences_to_file(
+Rcpp::List cpp_extract_sequences_to_file(
   Rcpp::CharacterVector files,
   std::string source_type,
   Rcpp::NumericVector ids_zero_based,
@@ -1289,7 +1538,11 @@ double cpp_extract_sequences_to_file(
   std::string output_type,
   std::string outfile,
   bool append,
-  bool compress
+  bool compress,
+  double max_bridge_gap,
+  double max_region_bytes,
+  std::string extract_mode,
+  bool diagnostics
 ) {
   if (!cpp_index_ptr_is_valid(index_ptr_sexp)) {
     throw std::runtime_error("Invalid index pointer; recreate from serialized payload.");
@@ -1302,8 +1555,17 @@ double cpp_extract_sequences_to_file(
   if (static_cast<size_t>(files.size()) != bundle.files.size()) {
     throw std::runtime_error("Override `file` must contain same file count as index.");
   }
+  const std::uint64_t bridge_gap = parseNonNegativeWhole(max_bridge_gap, "max_bridge_gap");
+  const std::uint64_t region_bytes = parsePositiveWhole(max_region_bytes, "max_region_bytes");
+  const ExtractExecutionMode mode = parseExtractExecutionMode(extract_mode);
+  ExtractionDiagnostics diag;
+  ExtractionDiagnostics* diag_ptr = diagnostics ? &diag : nullptr;
   if (ids_zero_based.size() < 1) {
-    return 0.0;
+    Rcpp::List out = Rcpp::List::create(Rcpp::Named("written") = 0.0);
+    if (diagnostics) {
+      out.attr("fastqindexr_diagnostics") = diagnosticsToList(diag);
+    }
+    return out;
   }
 
   const std::string resolved_output_type = resolveOutputType(output_type, bundle.format);
@@ -1311,13 +1573,34 @@ double cpp_extract_sequences_to_file(
   const bool need_parsed_qual = (resolved_output_type == "fastq");
 
   if (requestIsSortedUnique(requested) && !append) {
-    return streamSortedUniqueToFile(
-      files, bundle, requested, resolved_output_type, outfile, compress
+    const double written = streamSortedUniqueToFile(
+      files,
+      bundle,
+      requested,
+      resolved_output_type,
+      outfile,
+      compress,
+      bridge_gap,
+      region_bytes,
+      mode,
+      diag_ptr
     );
+    Rcpp::List out = Rcpp::List::create(Rcpp::Named("written") = written);
+    if (diagnostics) {
+      out.attr("fastqindexr_diagnostics") = diagnosticsToList(diag);
+    }
+    return out;
   }
 
   const SelectedRecordMap selected_global = collectRequestedRecords(
-    files, bundle, requested, need_parsed_qual
+    files,
+    bundle,
+    requested,
+    need_parsed_qual,
+    bridge_gap,
+    region_bytes,
+    mode,
+    diag_ptr
   );
 
   std::unique_ptr<OutputWriter> writer;
@@ -1336,7 +1619,13 @@ double cpp_extract_sequences_to_file(
     writer->write(renderRecord(it->second, resolved_output_type));
     written++;
   }
-  return static_cast<double>(written);
+  Rcpp::List out = Rcpp::List::create(
+    Rcpp::Named("written") = static_cast<double>(written)
+  );
+  if (diagnostics) {
+    out.attr("fastqindexr_diagnostics") = diagnosticsToList(diag);
+  }
+  return out;
 }
 
 // [[Rcpp::export]]
@@ -1346,6 +1635,10 @@ SEXP cpp_extract_sequences_dnastringset(
   Rcpp::NumericVector ids_zero_based,
   SEXP index_ptr_sexp,
   double chunk_chars,
+  double max_bridge_gap,
+  double max_region_bytes,
+  std::string extract_mode,
+  bool diagnostics,
   std::string renumber_mode
 ) {
   if (!cpp_index_ptr_is_valid(index_ptr_sexp)) {
@@ -1362,6 +1655,11 @@ SEXP cpp_extract_sequences_dnastringset(
   if (!std::isfinite(chunk_chars) || chunk_chars <= 0.0) {
     throw std::runtime_error("`chunk_chars` must be a finite positive value.");
   }
+  const std::uint64_t bridge_gap = parseNonNegativeWhole(max_bridge_gap, "max_bridge_gap");
+  const std::uint64_t region_bytes = parsePositiveWhole(max_region_bytes, "max_region_bytes");
+  const ExtractExecutionMode mode = parseExtractExecutionMode(extract_mode);
+  ExtractionDiagnostics diag;
+  ExtractionDiagnostics* diag_ptr = diagnostics ? &diag : nullptr;
   if (renumber_mode != "none" &&
       renumber_mode != "zero_based" &&
       renumber_mode != "one_based") {
@@ -1370,15 +1668,27 @@ SEXP cpp_extract_sequences_dnastringset(
   if (ids_zero_based.size() == 0) {
     Rcpp::Environment biostrings = Rcpp::Environment::namespace_env("Biostrings");
     Rcpp::Function dna_string_set = biostrings["DNAStringSet"];
-    return dna_string_set(Rcpp::CharacterVector(), Rcpp::Named("use.names") = true);
+    SEXP empty = dna_string_set(Rcpp::CharacterVector(), Rcpp::Named("use.names") = true);
+    if (diagnostics) {
+      Rf_setAttrib(empty, Rf_install("fastqindexr_diagnostics"), diagnosticsToList(diag));
+    }
+    return empty;
   }
 
   const std::vector<std::uint64_t> requested = parseRequestedIds(ids_zero_based);
-  return buildDNAStringSetFromRequested(
+  SEXP out = buildDNAStringSetFromRequested(
     files,
     bundle,
     requested,
     static_cast<std::uint64_t>(chunk_chars),
-    renumber_mode
+    renumber_mode,
+    bridge_gap,
+    region_bytes,
+    mode,
+    diag_ptr
   );
+  if (diagnostics) {
+    Rf_setAttrib(out, Rf_install("fastqindexr_diagnostics"), diagnosticsToList(diag));
+  }
+  return out;
 }

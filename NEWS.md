@@ -10,6 +10,8 @@
 - Add `extract_sequences_dnastringset()` with chunked construction of
   `Biostrings::DNAStringSet` for improved large-request memory behavior.
 - Add similar chunked extraction to `extract_sequences()` for reduced memory usage in large extracts.
+- Add session-level region-merge tuning for extraction via options
+  `fastqindexr.max_bridge_gap` and `fastqindexr.max_region_bytes`.
 
 ## 0.0.2
 
