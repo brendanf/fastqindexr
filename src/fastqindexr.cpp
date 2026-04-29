@@ -119,17 +119,40 @@ struct ExtractionDiagnostics {
   std::uint64_t regions_planned{0};
   std::uint64_t extract_attempts{0};
   std::uint64_t extract_failures{0};
+  std::uint64_t extract_failures_partial{0};
+  std::uint64_t extract_failures_malformed{0};
+  std::uint64_t extract_failures_other{0};
   std::uint64_t fallback_invocations{0};
   std::uint64_t fallback_records{0};
+  std::string last_failure_message{};
 };
+
+void recordExtractFailure(ExtractionDiagnostics* diag, const std::string& msg) {
+  if (diag == nullptr) {
+    return;
+  }
+  diag->extract_failures++;
+  diag->last_failure_message = msg;
+  if (msg.find("Partial extraction for requested region.") != std::string::npos) {
+    diag->extract_failures_partial++;
+  } else if (msg.find("Malformed extracted line count for region.") != std::string::npos) {
+    diag->extract_failures_malformed++;
+  } else {
+    diag->extract_failures_other++;
+  }
+}
 
 Rcpp::List diagnosticsToList(const ExtractionDiagnostics& diag) {
   return Rcpp::List::create(
     Rcpp::Named("regions_planned") = static_cast<double>(diag.regions_planned),
     Rcpp::Named("extract_attempts") = static_cast<double>(diag.extract_attempts),
     Rcpp::Named("extract_failures") = static_cast<double>(diag.extract_failures),
+    Rcpp::Named("extract_failures_partial") = static_cast<double>(diag.extract_failures_partial),
+    Rcpp::Named("extract_failures_malformed") = static_cast<double>(diag.extract_failures_malformed),
+    Rcpp::Named("extract_failures_other") = static_cast<double>(diag.extract_failures_other),
     Rcpp::Named("fallback_invocations") = static_cast<double>(diag.fallback_invocations),
-    Rcpp::Named("fallback_records") = static_cast<double>(diag.fallback_records)
+    Rcpp::Named("fallback_records") = static_cast<double>(diag.fallback_records),
+    Rcpp::Named("last_failure_message") = diag.last_failure_message
   );
 }
 
@@ -671,12 +694,22 @@ SelectedRecordMap collectRequestedRecords(
           std::uint64_t global_id = bundle.record_offsets[file_idx] + local_id;
           selected_global[global_id] = std::move(rec);
         }
-      } catch (...) {
-        if (diag != nullptr) {
-          diag->extract_failures++;
-        }
+      } catch (const std::exception& e) {
+        recordExtractFailure(diag, e.what());
         // fastqindexr change: Fallback preserves correctness when random-seek
         // extraction fails for particular gzip layouts.
+        sequentialFallbackCollect(
+          Rcpp::as<std::string>(files[file_idx]),
+          bundle.format,
+          requested_set,
+          bundle.record_offsets[file_idx],
+          &selected_global,
+          need_qual,
+          diag
+        );
+        break;
+      } catch (...) {
+        recordExtractFailure(diag, "Unknown indexed extraction failure.");
         sequentialFallbackCollect(
           Rcpp::as<std::string>(files[file_idx]),
           bundle.format,
@@ -924,10 +957,35 @@ double streamSortedUniqueToFile(
           wrote_in_this_file = true;
           n_written++;
         }
-      } catch (...) {
-        if (diag != nullptr) {
-          diag->extract_failures++;
+      } catch (const std::exception& e) {
+        recordExtractFailure(diag, e.what());
+        if (!wrote_in_this_file) {
+          n_written += sequentialFallbackStreamToFile(
+            Rcpp::as<std::string>(files[file_idx]),
+            bundle.format,
+            requested_set,
+            need_qual,
+            resolved_output_type,
+            writer.get(),
+            diag
+          );
+        } else {
+          return fullCollectAndRewriteToFile(
+            files,
+            bundle,
+            requested,
+            resolved_output_type,
+            outfile,
+            compress,
+            max_bridge_gap,
+            max_region_bytes,
+            mode,
+            diag
+          );
         }
+        break;
+      } catch (...) {
+        recordExtractFailure(diag, "Unknown indexed extraction failure.");
         if (!wrote_in_this_file) {
           n_written += sequentialFallbackStreamToFile(
             Rcpp::as<std::string>(files[file_idx]),
@@ -1191,10 +1249,12 @@ SEXP buildDNAStringSetFromRequested(
               renumber_mode
             );
           }
+        } catch (const std::exception& e) {
+          recordExtractFailure(diag, e.what());
+          fell_back = true;
+          break;
         } catch (...) {
-          if (diag != nullptr) {
-            diag->extract_failures++;
-          }
+          recordExtractFailure(diag, "Unknown indexed extraction failure.");
           fell_back = true;
           break;
         }

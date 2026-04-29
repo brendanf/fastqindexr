@@ -268,8 +268,12 @@ test_that("diagnostics attributes are exposed when enabled", {
       "regions_planned",
       "extract_attempts",
       "extract_failures",
+      "extract_failures_partial",
+      "extract_failures_malformed",
+      "extract_failures_other",
       "fallback_invocations",
-      "fallback_records"
+      "fallback_records",
+      "last_failure_message"
     )
   )
 
