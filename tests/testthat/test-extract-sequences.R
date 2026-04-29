@@ -156,7 +156,7 @@ test_that("extractors honor region merge tuning options", {
   baseline <- extract_sequences(idx, ids, return = "list")
   old_opts <- options(
     fastqindexr.max_bridge_gap = 0,
-    fastqindexr.max_region_bytes = 8
+    fastqindexr.max_region_records = 8
   )
   on.exit(options(old_opts), add = TRUE)
 
@@ -184,7 +184,7 @@ test_that("region merge tuning options validate cleanly", {
 
   old_opts <- options(
     fastqindexr.max_bridge_gap = NA_real_,
-    fastqindexr.max_region_bytes = 2147483647,
+    fastqindexr.max_region_records = 2147483647,
     fastqindexr.extract_mode = "indexed",
     fastqindexr.extract_diagnostics = FALSE
   )
@@ -194,15 +194,15 @@ test_that("region merge tuning options validate cleanly", {
     "fastqindexr.max_bridge_gap"
   )
 
-  options(fastqindexr.max_bridge_gap = 1L, fastqindexr.max_region_bytes = Inf)
+  options(fastqindexr.max_bridge_gap = 1L, fastqindexr.max_region_records = Inf)
   expect_error(
     extract_sequences(idx, 1L),
-    "fastqindexr.max_region_bytes"
+    "fastqindexr.max_region_records"
   )
 
   options(
     fastqindexr.max_bridge_gap = 1L,
-    fastqindexr.max_region_bytes = 1000L,
+    fastqindexr.max_region_records = 1000L,
     fastqindexr.extract_mode = "bad"
   )
   expect_error(
@@ -212,7 +212,7 @@ test_that("region merge tuning options validate cleanly", {
 
   options(
     fastqindexr.max_bridge_gap = 1L,
-    fastqindexr.max_region_bytes = 1000L,
+    fastqindexr.max_region_records = 1000L,
     fastqindexr.extract_mode = "indexed",
     fastqindexr.extract_diagnostics = 1
   )
@@ -232,7 +232,7 @@ test_that("sequential_only mode preserves extraction outputs", {
 
   old_opts <- options(
     fastqindexr.max_bridge_gap = 64,
-    fastqindexr.max_region_bytes = 2147483647,
+    fastqindexr.max_region_records = 2147483647,
     fastqindexr.extract_mode = "indexed",
     fastqindexr.extract_diagnostics = FALSE
   )
@@ -253,7 +253,7 @@ test_that("diagnostics attributes are exposed when enabled", {
 
   old_opts <- options(
     fastqindexr.max_bridge_gap = 64,
-    fastqindexr.max_region_bytes = 2147483647,
+    fastqindexr.max_region_records = 2147483647,
     fastqindexr.extract_mode = "indexed",
     fastqindexr.extract_diagnostics = TRUE
   )
@@ -273,6 +273,22 @@ test_that("diagnostics attributes are exposed when enabled", {
       "extract_failures_other",
       "fallback_invocations",
       "fallback_records",
+      "time_region_plan_ms",
+      "time_indexed_dense_ms",
+      "time_indexed_selective_ms",
+      "time_selective_seek_init_ms",
+      "time_selective_inflate_ms",
+      "time_selective_parse_ms",
+      "time_selective_line_split_ms",
+      "time_selective_materialize_ms",
+      "time_selective_callback_ms",
+      "time_fallback_ms",
+      "time_sequential_init_ms",
+      "time_sequential_inflate_ms",
+      "time_sequential_parse_ms",
+      "time_sequential_line_split_ms",
+      "time_sequential_materialize_ms",
+      "time_sequential_callback_ms",
       "last_failure_message"
     )
   )
@@ -304,13 +320,13 @@ test_that("extract_sequences output is stable across density and region-merge gr
 
   opt_grid <- expand.grid(
     max_bridge_gap = c(0L, 64L, 256L),
-    max_region_bytes = c(50000L, 500000L, 2147483647L),
+    max_region_records = c(50000L, 500000L, 2147483647L),
     stringsAsFactors = FALSE
   )
 
   old_opts <- options(
     fastqindexr.max_bridge_gap = 64,
-    fastqindexr.max_region_bytes = 2147483647,
+    fastqindexr.max_region_records = 2147483647,
     fastqindexr.extract_mode = "indexed",
     fastqindexr.extract_diagnostics = FALSE
   )
@@ -320,7 +336,7 @@ test_that("extract_sequences output is stable across density and region-merge gr
     ids <- patterns[[nm]]
     options(
       fastqindexr.max_bridge_gap = 64,
-      fastqindexr.max_region_bytes = 2147483647,
+      fastqindexr.max_region_records = 2147483647,
       fastqindexr.extract_mode = "indexed",
       fastqindexr.extract_diagnostics = FALSE
     )
@@ -328,7 +344,7 @@ test_that("extract_sequences output is stable across density and region-merge gr
     for (k in seq_len(nrow(opt_grid))) {
       options(
         fastqindexr.max_bridge_gap = opt_grid$max_bridge_gap[k],
-        fastqindexr.max_region_bytes = opt_grid$max_region_bytes[k],
+        fastqindexr.max_region_records = opt_grid$max_region_records[k],
         fastqindexr.extract_mode = "indexed",
         fastqindexr.extract_diagnostics = FALSE
       )

@@ -7,6 +7,9 @@
 #include "fastqindex_core/process/io/FileSource.h"
 
 #include <algorithm>
+#ifdef FASTQINDEXR_TIMING
+#include <chrono>
+#endif
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -26,6 +29,12 @@
 #endif
 
 namespace {
+
+#ifdef FASTQINDEXR_TIMING
+constexpr bool kFastqindexrTimingEnabled = true;
+#else
+constexpr bool kFastqindexrTimingEnabled = false;
+#endif
 
 constexpr int kGzBufferSize = 8192;
 
@@ -115,6 +124,7 @@ enum class ExtractExecutionMode {
   SequentialOnly = 1
 };
 
+#ifdef FASTQINDEXR_TIMING
 struct ExtractionDiagnostics {
   std::uint64_t regions_planned{0};
   std::uint64_t extract_attempts{0};
@@ -124,8 +134,37 @@ struct ExtractionDiagnostics {
   std::uint64_t extract_failures_other{0};
   std::uint64_t fallback_invocations{0};
   std::uint64_t fallback_records{0};
+  double time_region_plan_ms{0.0};
+  double time_indexed_dense_ms{0.0};
+  double time_indexed_selective_ms{0.0};
+  double time_selective_seek_init_ms{0.0};
+  double time_selective_inflate_ms{0.0};
+  double time_selective_parse_ms{0.0};
+  double time_selective_line_split_ms{0.0};
+  double time_selective_materialize_ms{0.0};
+  double time_selective_callback_ms{0.0};
+  double time_fallback_ms{0.0};
+  double time_sequential_init_ms{0.0};
+  double time_sequential_inflate_ms{0.0};
+  double time_sequential_parse_ms{0.0};
+  double time_sequential_line_split_ms{0.0};
+  double time_sequential_materialize_ms{0.0};
+  double time_sequential_callback_ms{0.0};
   std::string last_failure_message{};
 };
+
+ExtractionDiagnostics* diagnosticsPtrIfEnabled(
+  ExtractionDiagnostics* diag,
+  bool diagnostics_requested
+) {
+  if constexpr (!kFastqindexrTimingEnabled) {
+    return nullptr;
+  }
+  if (!diagnostics_requested) {
+    return nullptr;
+  }
+  return diag;
+}
 
 void recordExtractFailure(ExtractionDiagnostics* diag, const std::string& msg) {
   if (diag == nullptr) {
@@ -152,9 +191,27 @@ Rcpp::List diagnosticsToList(const ExtractionDiagnostics& diag) {
     Rcpp::Named("extract_failures_other") = static_cast<double>(diag.extract_failures_other),
     Rcpp::Named("fallback_invocations") = static_cast<double>(diag.fallback_invocations),
     Rcpp::Named("fallback_records") = static_cast<double>(diag.fallback_records),
+    Rcpp::Named("time_region_plan_ms") = diag.time_region_plan_ms,
+    Rcpp::Named("time_indexed_dense_ms") = diag.time_indexed_dense_ms,
+    Rcpp::Named("time_indexed_selective_ms") = diag.time_indexed_selective_ms,
+    Rcpp::Named("time_selective_seek_init_ms") = diag.time_selective_seek_init_ms,
+    Rcpp::Named("time_selective_inflate_ms") = diag.time_selective_inflate_ms,
+    Rcpp::Named("time_selective_parse_ms") = diag.time_selective_parse_ms,
+    Rcpp::Named("time_selective_line_split_ms") = diag.time_selective_line_split_ms,
+    Rcpp::Named("time_selective_materialize_ms") = diag.time_selective_materialize_ms,
+    Rcpp::Named("time_selective_callback_ms") = diag.time_selective_callback_ms,
+    Rcpp::Named("time_fallback_ms") = diag.time_fallback_ms,
+    Rcpp::Named("time_sequential_init_ms") = diag.time_sequential_init_ms,
+    Rcpp::Named("time_sequential_inflate_ms") = diag.time_sequential_inflate_ms,
+    Rcpp::Named("time_sequential_parse_ms") = diag.time_sequential_parse_ms,
+    Rcpp::Named("time_sequential_line_split_ms") = diag.time_sequential_line_split_ms,
+    Rcpp::Named("time_sequential_materialize_ms") = diag.time_sequential_materialize_ms,
+    Rcpp::Named("time_sequential_callback_ms") = diag.time_sequential_callback_ms,
     Rcpp::Named("last_failure_message") = diag.last_failure_message
   );
 }
+
+#endif
 
 std::uint64_t asUInt64(double value, const std::string& field) {
   if (!std::isfinite(value) || value < 0) {
@@ -421,9 +478,12 @@ std::uint64_t countGzLines(const std::string& path) {
 std::vector<std::pair<std::uint64_t, std::uint64_t>> buildDenseRegionsFromSortedUnique(
   const std::vector<std::uint64_t>& ids,
   std::uint64_t max_bridge_gap,
-  std::uint64_t max_region_bytes,
-  int record_size,
+  std::uint64_t max_region_records,
+  int record_size
+  #ifdef FASTQINDEXR_TIMING
+  ,
   ExtractionDiagnostics* diag
+  #endif
 ) {
   std::vector<std::pair<std::uint64_t, std::uint64_t>> regions;
   if (ids.empty()) {
@@ -434,12 +494,11 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> buildDenseRegionsFromSorted
   }
   std::uint64_t start = ids[0];
   std::uint64_t last = ids[0];
-  const std::uint64_t bytes_per_record = static_cast<std::uint64_t>(record_size);
   for (size_t i = 1; i < ids.size(); ++i) {
     const bool within_gap = (ids[i] <= last + max_bridge_gap + 1);
     const std::uint64_t span_records = ids[i] - start + 1;
-    const bool within_bytes = (span_records <= max_region_bytes / bytes_per_record);
-    if (within_gap && within_bytes) {
+    const bool within_records = (span_records <= max_region_records);
+    if (within_gap && within_records) {
       last = ids[i];
     } else {
       regions.emplace_back(start, last);
@@ -448,18 +507,23 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> buildDenseRegionsFromSorted
     }
   }
   regions.emplace_back(start, last);
+  #ifdef FASTQINDEXR_TIMING
   if (diag != nullptr) {
     diag->regions_planned += static_cast<std::uint64_t>(regions.size());
   }
+  #endif
   return regions;
 }
 
 std::vector<std::pair<std::uint64_t, std::uint64_t>> denseRegions(
   std::vector<std::uint64_t> ids,
   std::uint64_t max_bridge_gap,
-  std::uint64_t max_region_bytes,
-  int record_size,
+  std::uint64_t max_region_records,
+  int record_size
+  #ifdef FASTQINDEXR_TIMING
+  ,
   ExtractionDiagnostics* diag
+  #endif
 ) {
   if (ids.empty()) {
     return {};
@@ -469,9 +533,12 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> denseRegions(
   return buildDenseRegionsFromSortedUnique(
     ids,
     max_bridge_gap,
-    max_region_bytes,
-    record_size,
-    diag
+    max_region_records,
+      record_size
+      #ifdef FASTQINDEXR_TIMING
+      ,
+      diag
+      #endif
   );
 }
 
@@ -497,59 +564,237 @@ ParsedRecord parseRecordFromFixedLines(
   return ParsedRecord{trimPrefix(lines[offset], '>'), lines[offset + 1], ""};
 }
 
+std::uint64_t scanSequentialRequestedRecords(
+  const std::string& file,
+  const std::string& type,
+  bool include_qual,
+  const std::unordered_set<std::uint64_t>& requested_local_ids,
+  const std::function<void(std::uint64_t, const ParsedRecord&)>& on_record
+  #ifdef FASTQINDEXR_TIMING
+  ,
+  ExtractionDiagnostics* diag
+  #endif
+) {
+  #ifdef FASTQINDEXR_TIMING
+  if (diag != nullptr) {
+    diag->fallback_invocations++;
+  }
+  const auto init_t0 = std::chrono::steady_clock::now();
+  #endif
+  gzFile stream = gzopen(file.c_str(), "rb");
+  if (stream == nullptr) {
+    throw std::runtime_error("Fallback parser could not open file: " + file);
+  }
+  #ifdef FASTQINDEXR_TIMING
+  if (diag != nullptr) {
+    const auto init_t1 = std::chrono::steady_clock::now();
+    diag->time_sequential_init_ms +=
+      std::chrono::duration<double, std::milli>(init_t1 - init_t0).count();
+  }
+  #endif
+
+  std::vector<std::uint64_t> requested_sorted(requested_local_ids.begin(), requested_local_ids.end());
+  std::sort(requested_sorted.begin(), requested_sorted.end());
+  std::size_t requested_idx = 0;
+  auto is_requested = [&](std::uint64_t local_id) -> bool {
+    while (requested_idx < requested_sorted.size() && requested_sorted[requested_idx] < local_id) {
+      requested_idx++;
+    }
+    return requested_idx < requested_sorted.size() && requested_sorted[requested_idx] == local_id;
+  };
+
+  const bool is_fastq = (type == "fastq");
+  const int lines_per_record = is_fastq ? 4 : 2;
+  std::uint64_t local_id = 0;
+  std::uint64_t selected_count = 0;
+  bool capture_current_record = is_requested(local_id);
+  int line_in_record = 0;
+  std::string current_line;
+  current_line.reserve(256);
+  std::string header;
+  std::string seq;
+  std::string qual;
+  std::vector<char> buffer(kGzBufferSize * 8, '\0');
+  const std::string empty_line;
+
+  auto consume_line = [&](const std::string& line) {
+    #ifdef FASTQINDEXR_TIMING
+    const auto parse_t0 = std::chrono::steady_clock::now();
+    #endif
+    if (capture_current_record) {
+      if (is_fastq) {
+        if (line_in_record == 0) {
+          header = line;
+        } else if (line_in_record == 1) {
+          seq = line;
+        } else if (line_in_record == 3) {
+          qual = line;
+        }
+      } else {
+        if (line_in_record == 0) {
+          header = line;
+        } else if (line_in_record == 1) {
+          seq = line;
+        }
+      }
+    }
+    line_in_record++;
+    if (line_in_record == lines_per_record) {
+      #ifdef FASTQINDEXR_TIMING
+      if (diag != nullptr) {
+        const auto parse_t1 = std::chrono::steady_clock::now();
+        diag->time_sequential_parse_ms +=
+          std::chrono::duration<double, std::milli>(parse_t1 - parse_t0).count();
+      }
+      #endif
+      if (capture_current_record) {
+        #ifdef FASTQINDEXR_TIMING
+        const auto materialize_t0 = std::chrono::steady_clock::now();
+        #endif
+        const ParsedRecord rec{
+          trimPrefix(header, is_fastq ? '@' : '>'),
+          seq,
+          (is_fastq && include_qual) ? qual : ""
+        };
+        #ifdef FASTQINDEXR_TIMING
+        if (diag != nullptr) {
+          const auto materialize_t1 = std::chrono::steady_clock::now();
+          diag->time_sequential_materialize_ms +=
+            std::chrono::duration<double, std::milli>(materialize_t1 - materialize_t0).count();
+        }
+        const auto callback_t0 = std::chrono::steady_clock::now();
+        #endif
+        on_record(local_id, rec);
+        #ifdef FASTQINDEXR_TIMING
+        if (diag != nullptr) {
+          const auto callback_t1 = std::chrono::steady_clock::now();
+          diag->time_sequential_callback_ms +=
+            std::chrono::duration<double, std::milli>(callback_t1 - callback_t0).count();
+          diag->fallback_records++;
+        }
+        #endif
+        selected_count++;
+      }
+      local_id++;
+      capture_current_record = is_requested(local_id);
+      line_in_record = 0;
+      header.clear();
+      seq.clear();
+      qual.clear();
+      return;
+    }
+    #ifdef FASTQINDEXR_TIMING
+    if (diag != nullptr) {
+      const auto parse_t1 = std::chrono::steady_clock::now();
+      diag->time_sequential_parse_ms +=
+        std::chrono::duration<double, std::milli>(parse_t1 - parse_t0).count();
+    }
+    #endif
+  };
+
+  while (true) {
+    #ifdef FASTQINDEXR_TIMING
+    const auto inflate_t0 = std::chrono::steady_clock::now();
+    #endif
+    const int n_read = gzread(stream, buffer.data(), static_cast<unsigned int>(buffer.size()));
+    #ifdef FASTQINDEXR_TIMING
+    if (diag != nullptr) {
+      const auto inflate_t1 = std::chrono::steady_clock::now();
+      diag->time_sequential_inflate_ms +=
+        std::chrono::duration<double, std::milli>(inflate_t1 - inflate_t0).count();
+    }
+    #endif
+    if (n_read <= 0) {
+      break;
+    }
+    #ifdef FASTQINDEXR_TIMING
+    const auto split_t0 = std::chrono::steady_clock::now();
+    #endif
+    std::size_t line_start = 0;
+    for (std::size_t i = 0; i < static_cast<std::size_t>(n_read); ++i) {
+      const char ch = buffer[i];
+      if (ch != '\n') {
+        continue;
+      }
+      std::size_t seg_end = i;
+      if (seg_end > line_start && buffer[seg_end - 1] == '\r') {
+        seg_end--;
+      }
+      if (capture_current_record) {
+        if (seg_end > line_start) {
+          const char* seg_ptr = buffer.data() + line_start;
+          const std::size_t seg_len = seg_end - line_start;
+          if (current_line.empty()) {
+            current_line.assign(seg_ptr, seg_len);
+          } else {
+            current_line.append(seg_ptr, seg_len);
+          }
+        }
+        consume_line(current_line);
+        current_line.clear();
+      } else {
+        consume_line(empty_line);
+      }
+      line_start = i + 1;
+    }
+    if (line_start < static_cast<std::size_t>(n_read) && capture_current_record) {
+      const char* seg_ptr = buffer.data() + line_start;
+      const std::size_t seg_len = static_cast<std::size_t>(n_read) - line_start;
+      if (current_line.empty()) {
+        current_line.assign(seg_ptr, seg_len);
+      } else {
+        current_line.append(seg_ptr, seg_len);
+      }
+    }
+    #ifdef FASTQINDEXR_TIMING
+    if (diag != nullptr) {
+      const auto split_t1 = std::chrono::steady_clock::now();
+      diag->time_sequential_line_split_ms +=
+        std::chrono::duration<double, std::milli>(split_t1 - split_t0).count();
+    }
+    #endif
+  }
+  if (!current_line.empty()) {
+    consume_line(current_line);
+  }
+
+  gzclose(stream);
+  return selected_count;
+}
+
 void sequentialFallbackCollect(
   const std::string& file,
   const std::string& type,
   const std::unordered_set<std::uint64_t>& requested_local_ids,
   std::uint64_t global_offset,
   std::unordered_map<std::uint64_t, ParsedRecord>* selected_global,
-  bool include_qual,
-  ExtractionDiagnostics* diag
+  bool include_qual
+  #ifdef FASTQINDEXR_TIMING
+  , ExtractionDiagnostics* diag
+  #endif
 ) {
+  #ifdef FASTQINDEXR_TIMING
+  const auto t0 = std::chrono::steady_clock::now();
+  #endif
+  scanSequentialRequestedRecords(
+    file,
+    type,
+    include_qual,
+    requested_local_ids,
+    [&](std::uint64_t local_id, const ParsedRecord& rec) {
+      (*selected_global)[global_offset + local_id] = rec;
+    }
+    #ifdef FASTQINDEXR_TIMING
+    , diag
+    #endif
+  );
+  #ifdef FASTQINDEXR_TIMING
   if (diag != nullptr) {
-    diag->fallback_invocations++;
+    const auto t1 = std::chrono::steady_clock::now();
+    diag->time_fallback_ms +=
+      std::chrono::duration<double, std::milli>(t1 - t0).count();
   }
-  gzFile stream = gzopen(file.c_str(), "rb");
-  if (stream == nullptr) {
-    throw std::runtime_error("Fallback parser could not open file: " + file);
-  }
-
-  std::uint64_t local_id = 0;
-  std::string a;
-  std::string b;
-  std::string c;
-  std::string d;
-
-  if (type == "fastq") {
-    while (readGzLine(stream, a)) {
-      if (!readGzLine(stream, b) || !readGzLine(stream, c) || !readGzLine(stream, d)) {
-        break;
-      }
-      if (requested_local_ids.find(local_id) != requested_local_ids.end()) {
-        const std::string& q = include_qual ? d : "";
-        (*selected_global)[global_offset + local_id] = ParsedRecord{trimPrefix(a, '@'), b, q};
-        if (diag != nullptr) {
-          diag->fallback_records++;
-        }
-      }
-      local_id++;
-    }
-  } else {
-    while (readGzLine(stream, a)) {
-      if (!readGzLine(stream, b)) {
-        break;
-      }
-      if (requested_local_ids.find(local_id) != requested_local_ids.end()) {
-        (*selected_global)[global_offset + local_id] = ParsedRecord{trimPrefix(a, '>'), b, ""};
-        if (diag != nullptr) {
-          diag->fallback_records++;
-        }
-      }
-      local_id++;
-    }
-  }
-
-  gzclose(stream);
+  #endif
 }
 
 std::vector<std::uint64_t> parseRequestedIds(const Rcpp::NumericVector& ids_zero_based) {
@@ -600,9 +845,11 @@ SelectedRecordMap collectRequestedRecords(
   const std::vector<std::uint64_t>& requested,
   bool include_qual,
   std::uint64_t max_bridge_gap,
-  std::uint64_t max_region_bytes,
-  ExtractExecutionMode mode,
-  ExtractionDiagnostics* diag
+  std::uint64_t max_region_records,
+  ExtractExecutionMode mode
+  #ifdef FASTQINDEXR_TIMING
+  , ExtractionDiagnostics* diag
+  #endif
 ) {
   const bool need_qual = (bundle.format == "fastq" && include_qual);
   const bool sorted_unique = requestIsSortedUnique(requested);
@@ -641,18 +888,32 @@ SelectedRecordMap collectRequestedRecords(
         requested_set,
         bundle.record_offsets[file_idx],
         &selected_global,
-        need_qual,
-        diag
+        need_qual
+        #ifdef FASTQINDEXR_TIMING
+        , diag
+        #endif
       );
       continue;
     }
+    #ifdef FASTQINDEXR_TIMING
+    const auto plan_t0 = std::chrono::steady_clock::now();
+    #endif
     auto regions = denseRegions(
       local_ids,
       max_bridge_gap,
-      max_region_bytes,
-      bundle.record_size,
-      diag
+      max_region_records,
+      bundle.record_size
+      #ifdef FASTQINDEXR_TIMING
+      , diag
+      #endif
     );
+    #ifdef FASTQINDEXR_TIMING
+    if (diag != nullptr) {
+      const auto plan_t1 = std::chrono::steady_clock::now();
+      diag->time_region_plan_ms +=
+        std::chrono::duration<double, std::milli>(plan_t1 - plan_t0).count();
+    }
+    #endif
     for (const auto& rg : regions) {
       std::uint64_t region_start = rg.first;
       std::uint64_t region_end = rg.second;
@@ -661,41 +922,106 @@ SelectedRecordMap collectRequestedRecords(
         (region_end - region_start + 1) * static_cast<std::uint64_t>(bundle.record_size);
 
       try {
+        #ifdef FASTQINDEXR_TIMING
         if (diag != nullptr) {
           diag->extract_attempts++;
         }
-        std::vector<std::string> lines = extractor.extract(
-          Rcpp::as<std::string>(files[file_idx]),
-          bundle.indexed_files[file_idx].index.entries,
-          line_start,
-          line_count
-        );
-        if (lines.size() % static_cast<std::size_t>(bundle.record_size) != 0) {
-          throw std::runtime_error("Malformed extracted line count for region.");
-        }
-        const std::size_t expected_records = static_cast<std::size_t>(
-          region_end - region_start + 1
-        );
-        std::size_t extracted_records = lines.size() / static_cast<std::size_t>(bundle.record_size);
-        if (extracted_records < expected_records) {
-          throw std::runtime_error("Partial extraction for requested region.");
-        }
-        for (std::size_t r = 0; r < extracted_records; ++r) {
-          std::uint64_t local_id = region_start + static_cast<std::uint64_t>(r);
-          if (requested_set.find(local_id) == requested_set.end()) {
-            continue;
-          }
-          ParsedRecord rec = parseRecordFromFixedLines(
+        #endif
+        const auto region_begin = std::lower_bound(local_ids.begin(), local_ids.end(), region_start);
+        const auto region_end_it = std::upper_bound(local_ids.begin(), local_ids.end(), region_end);
+        const std::uint64_t requested_in_region = static_cast<std::uint64_t>(region_end_it - region_begin);
+        const std::uint64_t region_span = region_end - region_start + 1;
+        const bool dense_region = (requested_in_region == region_span);
+
+        if (dense_region) {
+          #ifdef FASTQINDEXR_TIMING
+          const auto dense_t0 = std::chrono::steady_clock::now();
+          #endif
+          std::uint64_t extracted_records = 0;
+          extractor.extractRecords(
+            Rcpp::as<std::string>(files[file_idx]),
+            bundle.indexed_files[file_idx].index.entries,
+            line_start,
+            line_count,
+            bundle.record_size,
+            region_start,
             bundle.format,
-            lines,
-            r * static_cast<std::size_t>(bundle.record_size),
-            need_qual
+            need_qual,
+            [&](std::uint64_t local_id, const fastqindex_core::ExtractedRecord& rec_in) {
+              ParsedRecord rec{rec_in.seq_id, rec_in.seq, rec_in.qual};
+              const std::uint64_t global_id = bundle.record_offsets[file_idx] + local_id;
+              selected_global[global_id] = std::move(rec);
+              extracted_records++;
+            }
           );
-          std::uint64_t global_id = bundle.record_offsets[file_idx] + local_id;
-          selected_global[global_id] = std::move(rec);
+          if (extracted_records < region_span) {
+            throw std::runtime_error("Partial extraction for requested region.");
+          }
+          if (extracted_records > region_span) {
+            throw std::runtime_error("Malformed extracted line count for region.");
+          }
+          #ifdef FASTQINDEXR_TIMING
+          if (diag != nullptr) {
+            const auto dense_t1 = std::chrono::steady_clock::now();
+            diag->time_indexed_dense_ms +=
+              std::chrono::duration<double, std::milli>(dense_t1 - dense_t0).count();
+          }
+          #endif
+        } else {
+          #ifdef FASTQINDEXR_TIMING
+          const auto sel_t0 = std::chrono::steady_clock::now();
+          #endif
+          const std::unordered_set<std::uint64_t> region_requested_set(region_begin, region_end_it);
+          #ifdef FASTQINDEXR_TIMING
+          fastqindex_core::SelectiveExtractTimings selective_timings;
+          fastqindex_core::SelectiveExtractTimings* selective_timings_ptr =
+            (diag != nullptr) ? &selective_timings : nullptr;
+          #endif
+          std::uint64_t selected_records = 0;
+          extractor.extractSelectedRecords(
+            Rcpp::as<std::string>(files[file_idx]),
+            bundle.indexed_files[file_idx].index.entries,
+            line_start,
+            line_count,
+            bundle.record_size,
+            region_requested_set,
+            region_start,
+            bundle.format,
+            need_qual,
+            [&](std::uint64_t local_id, const fastqindex_core::ExtractedRecord& rec_in) {
+              ParsedRecord rec{rec_in.seq_id, rec_in.seq, rec_in.qual};
+              const std::uint64_t global_id = bundle.record_offsets[file_idx] + local_id;
+              selected_global[global_id] = std::move(rec);
+              selected_records++;
+            }
+            #ifdef FASTQINDEXR_TIMING
+            ,
+            selective_timings_ptr
+            #endif
+          );
+          if (selected_records < requested_in_region) {
+            throw std::runtime_error("Partial extraction for requested region.");
+          }
+          #ifdef FASTQINDEXR_TIMING
+          if (diag != nullptr) {
+            const auto sel_t1 = std::chrono::steady_clock::now();
+            diag->time_indexed_selective_ms +=
+              std::chrono::duration<double, std::milli>(sel_t1 - sel_t0).count();
+            diag->time_selective_seek_init_ms += selective_timings_ptr->time_seek_init_ms;
+            diag->time_selective_inflate_ms += selective_timings_ptr->time_inflate_ms;
+            diag->time_selective_parse_ms += selective_timings_ptr->time_parse_ms;
+            diag->time_selective_line_split_ms += selective_timings_ptr->time_line_split_ms;
+            diag->time_selective_materialize_ms += selective_timings_ptr->time_materialize_ms;
+            diag->time_selective_callback_ms += selective_timings_ptr->time_callback_ms;
+          }
+          #endif
         }
       } catch (const std::exception& e) {
-        recordExtractFailure(diag, e.what());
+        #ifdef FASTQINDEXR_TIMING
+        if (diag != nullptr) {
+          recordExtractFailure(diag, e.what());
+        }
+        #endif
         // fastqindexr change: Fallback preserves correctness when random-seek
         // extraction fails for particular gzip layouts.
         sequentialFallbackCollect(
@@ -704,20 +1030,26 @@ SelectedRecordMap collectRequestedRecords(
           requested_set,
           bundle.record_offsets[file_idx],
           &selected_global,
-          need_qual,
-          diag
+          need_qual
+          #ifdef FASTQINDEXR_TIMING
+          , diag
+          #endif
         );
         break;
       } catch (...) {
+        #ifdef FASTQINDEXR_TIMING
         recordExtractFailure(diag, "Unknown indexed extraction failure.");
+        #endif
         sequentialFallbackCollect(
           Rcpp::as<std::string>(files[file_idx]),
           bundle.format,
           requested_set,
           bundle.record_offsets[file_idx],
           &selected_global,
-          need_qual,
-          diag
+          need_qual
+          #ifdef FASTQINDEXR_TIMING
+          , diag
+          #endif
         );
         break;
       }
@@ -765,58 +1097,33 @@ std::uint64_t sequentialFallbackStreamToFile(
   const std::unordered_set<std::uint64_t>& requested_local_ids,
   bool need_qual,
   const std::string& output_type,
-  OutputWriter* writer,
-  ExtractionDiagnostics* diag
+  OutputWriter* writer
+  #ifdef FASTQINDEXR_TIMING
+  , ExtractionDiagnostics* diag
+  #endif
 ) {
+  #ifdef FASTQINDEXR_TIMING
+  const auto t0 = std::chrono::steady_clock::now();
+  #endif
+  const std::uint64_t count = scanSequentialRequestedRecords(
+    file,
+    type,
+    need_qual,
+    requested_local_ids,
+    [&](std::uint64_t, const ParsedRecord& rec) {
+      writer->write(renderRecord(rec, output_type));
+    }
+    #ifdef FASTQINDEXR_TIMING
+    , diag
+    #endif
+  );
+  #ifdef FASTQINDEXR_TIMING
   if (diag != nullptr) {
-    diag->fallback_invocations++;
+    const auto t1 = std::chrono::steady_clock::now();
+    diag->time_fallback_ms +=
+      std::chrono::duration<double, std::milli>(t1 - t0).count();
   }
-  std::uint64_t count = 0;
-  gzFile stream = gzopen(file.c_str(), "rb");
-  if (stream == nullptr) {
-    throw std::runtime_error("Fallback stream could not open file: " + file);
-  }
-
-  std::uint64_t local_id = 0;
-  std::string a;
-  std::string b;
-  std::string c;
-  std::string d;
-
-  if (type == "fastq") {
-    while (readGzLine(stream, a)) {
-      if (!readGzLine(stream, b) || !readGzLine(stream, c) || !readGzLine(stream, d)) {
-        break;
-      }
-      if (requested_local_ids.find(local_id) != requested_local_ids.end()) {
-        const std::string& q = need_qual ? d : "";
-        const ParsedRecord rec{trimPrefix(a, '@'), b, q};
-        writer->write(renderRecord(rec, output_type));
-        count++;
-        if (diag != nullptr) {
-          diag->fallback_records++;
-        }
-      }
-      local_id++;
-    }
-  } else {
-    while (readGzLine(stream, a)) {
-      if (!readGzLine(stream, b)) {
-        break;
-      }
-      if (requested_local_ids.find(local_id) != requested_local_ids.end()) {
-        const ParsedRecord rec{trimPrefix(a, '>'), b, ""};
-        writer->write(renderRecord(rec, output_type));
-        count++;
-        if (diag != nullptr) {
-          diag->fallback_records++;
-        }
-      }
-      local_id++;
-    }
-  }
-
-  gzclose(stream);
+  #endif
   return count;
 }
 
@@ -828,9 +1135,11 @@ double fullCollectAndRewriteToFile(
   const std::string& outfile,
   bool compress,
   std::uint64_t max_bridge_gap,
-  std::uint64_t max_region_bytes,
-  ExtractExecutionMode mode,
-  ExtractionDiagnostics* diag
+  std::uint64_t max_region_records,
+  ExtractExecutionMode mode
+  #ifdef FASTQINDEXR_TIMING
+  , ExtractionDiagnostics* diag
+  #endif
 ) {
   const bool include_qual = (resolved_output_type == "fastq");
   const SelectedRecordMap selected_global = collectRequestedRecords(
@@ -839,9 +1148,11 @@ double fullCollectAndRewriteToFile(
     requested,
     include_qual,
     max_bridge_gap,
-    max_region_bytes,
-    mode,
-    diag
+    max_region_records,
+    mode
+    #ifdef FASTQINDEXR_TIMING
+    , diag
+    #endif
   );
   std::unique_ptr<OutputWriter> writer = makeOutputWriter(outfile, false, compress);
   std::uint64_t written = 0;
@@ -864,9 +1175,11 @@ double streamSortedUniqueToFile(
   const std::string& outfile,
   bool compress,
   std::uint64_t max_bridge_gap,
-  std::uint64_t max_region_bytes,
-  ExtractExecutionMode mode,
-  ExtractionDiagnostics* diag
+  std::uint64_t max_region_records,
+  ExtractExecutionMode mode
+  #ifdef FASTQINDEXR_TIMING
+  , ExtractionDiagnostics* diag
+  #endif
 ) {
   const bool include_qual = (resolved_output_type == "fastq");
   const bool need_qual = (bundle.format == "fastq" && include_qual);
@@ -901,18 +1214,32 @@ double streamSortedUniqueToFile(
         requested_set,
         need_qual,
         resolved_output_type,
-        writer.get(),
-        diag
+        writer.get()
+        #ifdef FASTQINDEXR_TIMING
+        , diag
+        #endif
       );
       continue;
     }
+    #ifdef FASTQINDEXR_TIMING
+    const auto plan_t0 = std::chrono::steady_clock::now();
+    #endif
     const auto regions = buildDenseRegionsFromSortedUnique(
       local_ids,
       max_bridge_gap,
-      max_region_bytes,
-      bundle.record_size,
-      diag
+      max_region_records,
+      bundle.record_size
+      #ifdef FASTQINDEXR_TIMING
+      , diag
+      #endif
     );
+    #ifdef FASTQINDEXR_TIMING
+    if (diag != nullptr) {
+      const auto plan_t1 = std::chrono::steady_clock::now();
+      diag->time_region_plan_ms +=
+        std::chrono::duration<double, std::milli>(plan_t1 - plan_t0).count();
+    }
+    #endif
     bool wrote_in_this_file = false;
 
     for (const auto& rg : regions) {
@@ -922,43 +1249,104 @@ double streamSortedUniqueToFile(
       const std::uint64_t line_count =
         (region_end - region_start + 1) * static_cast<std::uint64_t>(bundle.record_size);
       try {
+        #ifdef FASTQINDEXR_TIMING
         if (diag != nullptr) {
           diag->extract_attempts++;
         }
-        std::vector<std::string> lines = extractor.extract(
-          Rcpp::as<std::string>(files[file_idx]),
-          bundle.indexed_files[file_idx].index.entries,
-          line_start,
-          line_count
-        );
-        if (lines.size() % static_cast<std::size_t>(bundle.record_size) != 0) {
-          throw std::runtime_error("Malformed extracted line count for region.");
-        }
-        const std::size_t expected_records = static_cast<std::size_t>(
-          region_end - region_start + 1
-        );
-        const std::size_t extracted_records =
-          lines.size() / static_cast<std::size_t>(bundle.record_size);
-        if (extracted_records < expected_records) {
-          throw std::runtime_error("Partial extraction for requested region.");
-        }
-        for (std::size_t r = 0; r < extracted_records; ++r) {
-          const std::uint64_t rec_local = region_start + static_cast<std::uint64_t>(r);
-          if (requested_set.find(rec_local) == requested_set.end()) {
-            continue;
-          }
-          const ParsedRecord rec = parseRecordFromFixedLines(
+        #endif
+        const auto region_begin = std::lower_bound(local_ids.begin(), local_ids.end(), region_start);
+        const auto region_end_it = std::upper_bound(local_ids.begin(), local_ids.end(), region_end);
+        const std::uint64_t requested_in_region = static_cast<std::uint64_t>(region_end_it - region_begin);
+        const std::uint64_t region_span = region_end - region_start + 1;
+        const bool dense_region = (requested_in_region == region_span);
+        if (dense_region) {
+          #ifdef FASTQINDEXR_TIMING
+          const auto dense_t0 = std::chrono::steady_clock::now();
+          #endif
+          std::uint64_t extracted_records = 0;
+          extractor.extractRecords(
+            Rcpp::as<std::string>(files[file_idx]),
+            bundle.indexed_files[file_idx].index.entries,
+            line_start,
+            line_count,
+            bundle.record_size,
+            region_start,
             bundle.format,
-            lines,
-            r * static_cast<std::size_t>(bundle.record_size),
-            need_qual
+            need_qual,
+            [&](std::uint64_t, const fastqindex_core::ExtractedRecord& rec_in) {
+              ParsedRecord rec{rec_in.seq_id, rec_in.seq, rec_in.qual};
+              writer->write(renderRecord(rec, resolved_output_type));
+              wrote_in_this_file = true;
+              n_written++;
+              extracted_records++;
+            }
           );
-          writer->write(renderRecord(rec, resolved_output_type));
-          wrote_in_this_file = true;
-          n_written++;
+          if (extracted_records < region_span) {
+            throw std::runtime_error("Partial extraction for requested region.");
+          }
+          if (extracted_records > region_span) {
+            throw std::runtime_error("Malformed extracted line count for region.");
+          }
+          #ifdef FASTQINDEXR_TIMING
+          if (diag != nullptr) {
+            const auto dense_t1 = std::chrono::steady_clock::now();
+            diag->time_indexed_dense_ms +=
+              std::chrono::duration<double, std::milli>(dense_t1 - dense_t0).count();
+          }
+          #endif
+        } else {
+          #ifdef FASTQINDEXR_TIMING
+          const auto sel_t0 = std::chrono::steady_clock::now();
+          #endif
+          const std::unordered_set<std::uint64_t> region_requested_set(region_begin, region_end_it);
+          #ifdef FASTQINDEXR_TIMING
+          fastqindex_core::SelectiveExtractTimings selective_timings;
+          fastqindex_core::SelectiveExtractTimings* selective_timings_ptr =
+            (diag != nullptr) ? &selective_timings : nullptr;
+          #endif
+          std::uint64_t selected_records = 0;
+          extractor.extractSelectedRecords(
+            Rcpp::as<std::string>(files[file_idx]),
+            bundle.indexed_files[file_idx].index.entries,
+            line_start,
+            line_count,
+            bundle.record_size,
+            region_requested_set,
+            region_start,
+            bundle.format,
+            need_qual,
+            [&](std::uint64_t, const fastqindex_core::ExtractedRecord& rec_in) {
+              const ParsedRecord rec{rec_in.seq_id, rec_in.seq, rec_in.qual};
+              writer->write(renderRecord(rec, resolved_output_type));
+              wrote_in_this_file = true;
+              n_written++;
+              selected_records++;
+            }
+            #ifdef FASTQINDEXR_TIMING
+            , selective_timings_ptr
+            #endif
+          );
+          if (selected_records < requested_in_region) {
+            throw std::runtime_error("Partial extraction for requested region.");
+          }
+          #ifdef FASTQINDEXR_TIMING
+          if (diag != nullptr) {
+            const auto sel_t1 = std::chrono::steady_clock::now();
+            diag->time_indexed_selective_ms +=
+              std::chrono::duration<double, std::milli>(sel_t1 - sel_t0).count();
+            diag->time_selective_seek_init_ms += selective_timings_ptr->time_seek_init_ms;
+            diag->time_selective_inflate_ms += selective_timings_ptr->time_inflate_ms;
+            diag->time_selective_parse_ms += selective_timings_ptr->time_parse_ms;
+            diag->time_selective_line_split_ms += selective_timings_ptr->time_line_split_ms;
+            diag->time_selective_materialize_ms += selective_timings_ptr->time_materialize_ms;
+            diag->time_selective_callback_ms += selective_timings_ptr->time_callback_ms;
+          }
+          #endif
         }
       } catch (const std::exception& e) {
+        #ifdef FASTQINDEXR_TIMING
         recordExtractFailure(diag, e.what());
+        #endif
         if (!wrote_in_this_file) {
           n_written += sequentialFallbackStreamToFile(
             Rcpp::as<std::string>(files[file_idx]),
@@ -966,8 +1354,10 @@ double streamSortedUniqueToFile(
             requested_set,
             need_qual,
             resolved_output_type,
-            writer.get(),
-            diag
+            writer.get()
+            #ifdef FASTQINDEXR_TIMING
+            , diag
+            #endif
           );
         } else {
           return fullCollectAndRewriteToFile(
@@ -978,14 +1368,18 @@ double streamSortedUniqueToFile(
             outfile,
             compress,
             max_bridge_gap,
-            max_region_bytes,
-            mode,
-            diag
+            max_region_records,
+            mode
+            #ifdef FASTQINDEXR_TIMING
+            , diag
+            #endif
           );
         }
         break;
       } catch (...) {
+        #ifdef FASTQINDEXR_TIMING
         recordExtractFailure(diag, "Unknown indexed extraction failure.");
+        #endif
         if (!wrote_in_this_file) {
           n_written += sequentialFallbackStreamToFile(
             Rcpp::as<std::string>(files[file_idx]),
@@ -993,8 +1387,10 @@ double streamSortedUniqueToFile(
             requested_set,
             need_qual,
             resolved_output_type,
-            writer.get(),
-            diag
+            writer.get()
+            #ifdef FASTQINDEXR_TIMING
+            , diag
+            #endif
           );
         } else {
           return fullCollectAndRewriteToFile(
@@ -1005,9 +1401,11 @@ double streamSortedUniqueToFile(
             outfile,
             compress,
             max_bridge_gap,
-            max_region_bytes,
-            mode,
-            diag
+            max_region_records,
+            mode
+            #ifdef FASTQINDEXR_TIMING
+            , diag
+            #endif
           );
         }
         break;
@@ -1099,9 +1497,12 @@ SEXP buildDNAStringSetFromRequested(
   std::uint64_t chunk_chars_limit,
   const std::string& renumber_mode,
   std::uint64_t max_bridge_gap,
-  std::uint64_t max_region_bytes,
-  ExtractExecutionMode mode,
+  std::uint64_t max_region_records,
+  ExtractExecutionMode mode
+  #ifdef FASTQINDEXR_TIMING
+  ,
   ExtractionDiagnostics* diag
+  #endif
 ) {
   const bool sorted_unique = requestIsSortedUnique(requested);
   std::vector<std::string> seq_chunk;
@@ -1119,9 +1520,12 @@ SEXP buildDNAStringSetFromRequested(
       requested,
       false,
       max_bridge_gap,
-      max_region_bytes,
-      mode,
+      max_region_records,
+      mode
+      #ifdef FASTQINDEXR_TIMING
+      ,
       diag
+      #endif
     );
     for (auto gid : requested) {
       auto it = selected_global.find(gid);
@@ -1169,8 +1573,11 @@ SEXP buildDNAStringSetFromRequested(
           requested_set,
           bundle.record_offsets[file_idx],
           &selected_global,
-          false,
+          false
+          #ifdef FASTQINDEXR_TIMING
+          ,
           diag
+          #endif
         );
         for (auto rec_local : local_ids) {
           const std::uint64_t gid = bundle.record_offsets[file_idx] + rec_local;
@@ -1191,13 +1598,26 @@ SEXP buildDNAStringSetFromRequested(
         }
         continue;
       }
+      #ifdef FASTQINDEXR_TIMING
+      const auto plan_t0 = std::chrono::steady_clock::now();
+      #endif
       const auto regions = buildDenseRegionsFromSortedUnique(
         local_ids,
         max_bridge_gap,
-        max_region_bytes,
-        bundle.record_size,
+        max_region_records,
+        bundle.record_size
+        #ifdef FASTQINDEXR_TIMING
+        ,
         diag
+        #endif
       );
+      #ifdef FASTQINDEXR_TIMING
+      if (diag != nullptr) {
+        const auto plan_t1 = std::chrono::steady_clock::now();
+        diag->time_region_plan_ms +=
+          std::chrono::duration<double, std::milli>(plan_t1 - plan_t0).count();
+      }
+      #endif
       bool fell_back = false;
 
       for (const auto& rg : regions) {
@@ -1207,54 +1627,125 @@ SEXP buildDNAStringSetFromRequested(
         const std::uint64_t line_count =
           (region_end - region_start + 1) * static_cast<std::uint64_t>(bundle.record_size);
         try {
+          #ifdef FASTQINDEXR_TIMING
           if (diag != nullptr) {
             diag->extract_attempts++;
           }
-          std::vector<std::string> lines = extractor.extract(
-            Rcpp::as<std::string>(files[file_idx]),
-            bundle.indexed_files[file_idx].index.entries,
-            line_start,
-            line_count
-          );
-          if (lines.size() % static_cast<std::size_t>(bundle.record_size) != 0) {
-            throw std::runtime_error("Malformed extracted line count for region.");
-          }
-          const std::size_t expected_records = static_cast<std::size_t>(
-            region_end - region_start + 1
-          );
-          const std::size_t extracted_records =
-            lines.size() / static_cast<std::size_t>(bundle.record_size);
-          if (extracted_records < expected_records) {
-            throw std::runtime_error("Partial extraction for requested region.");
-          }
-          for (std::size_t r = 0; r < extracted_records; ++r) {
-            const std::uint64_t rec_local = region_start + static_cast<std::uint64_t>(r);
-            if (requested_set.find(rec_local) == requested_set.end()) {
-              continue;
-            }
-            const ParsedRecord rec = parseRecordFromFixedLines(
+          #endif
+          const auto region_begin = std::lower_bound(local_ids.begin(), local_ids.end(), region_start);
+          const auto region_end_it = std::upper_bound(local_ids.begin(), local_ids.end(), region_end);
+          const std::uint64_t requested_in_region = static_cast<std::uint64_t>(region_end_it - region_begin);
+          const std::uint64_t region_span = region_end - region_start + 1;
+          const bool dense_region = (requested_in_region == region_span);
+          if (dense_region) {
+            #ifdef FASTQINDEXR_TIMING
+            const auto dense_t0 = std::chrono::steady_clock::now();
+            #endif
+            std::uint64_t extracted_records = 0;
+            extractor.extractRecords(
+              Rcpp::as<std::string>(files[file_idx]),
+              bundle.indexed_files[file_idx].index.entries,
+              line_start,
+              line_count,
+              bundle.record_size,
+              region_start,
               bundle.format,
-              lines,
-              r * static_cast<std::size_t>(bundle.record_size),
-              false
+              false,
+              [&](std::uint64_t, const fastqindex_core::ExtractedRecord& rec_in) {
+                const ParsedRecord rec{rec_in.seq_id, rec_in.seq, ""};
+                appendRecordToDNAChunks(
+                  rec,
+                  chunk_chars_limit,
+                  &seq_chunk,
+                  &id_chunk,
+                  &chunk_chars,
+                  &output_index,
+                  &dna_chunks,
+                  renumber_mode
+                );
+                extracted_records++;
+              }
             );
-            appendRecordToDNAChunks(
-              rec,
-              chunk_chars_limit,
-              &seq_chunk,
-              &id_chunk,
-              &chunk_chars,
-              &output_index,
-              &dna_chunks,
-              renumber_mode
+            if (extracted_records < region_span) {
+              throw std::runtime_error("Partial extraction for requested region.");
+            }
+            if (extracted_records > region_span) {
+              throw std::runtime_error("Malformed extracted line count for region.");
+            }
+            #ifdef FASTQINDEXR_TIMING
+            if (diag != nullptr) {
+              const auto dense_t1 = std::chrono::steady_clock::now();
+              diag->time_indexed_dense_ms +=
+                std::chrono::duration<double, std::milli>(dense_t1 - dense_t0).count();
+            }
+            #endif
+          } else {
+            #ifdef FASTQINDEXR_TIMING
+            const auto sel_t0 = std::chrono::steady_clock::now();
+            #endif
+            const std::unordered_set<std::uint64_t> region_requested_set(region_begin, region_end_it);
+            #ifdef FASTQINDEXR_TIMING
+            fastqindex_core::SelectiveExtractTimings selective_timings;
+            fastqindex_core::SelectiveExtractTimings* selective_timings_ptr =
+              (diag != nullptr) ? &selective_timings : nullptr;
+            #endif
+            std::uint64_t selected_records = 0;
+            extractor.extractSelectedRecords(
+              Rcpp::as<std::string>(files[file_idx]),
+              bundle.indexed_files[file_idx].index.entries,
+              line_start,
+              line_count,
+              bundle.record_size,
+              region_requested_set,
+              region_start,
+              bundle.format,
+              false,
+              [&](std::uint64_t, const fastqindex_core::ExtractedRecord& rec_in) {
+                const ParsedRecord rec{rec_in.seq_id, rec_in.seq, ""};
+                appendRecordToDNAChunks(
+                  rec,
+                  chunk_chars_limit,
+                  &seq_chunk,
+                  &id_chunk,
+                  &chunk_chars,
+                  &output_index,
+                  &dna_chunks,
+                  renumber_mode
+                );
+                selected_records++;
+              }
+              #ifdef FASTQINDEXR_TIMING
+              ,
+              selective_timings_ptr
+              #endif
             );
+            if (selected_records < requested_in_region) {
+              throw std::runtime_error("Partial extraction for requested region.");
+            }
+            #ifdef FASTQINDEXR_TIMING
+            if (diag != nullptr) {
+              const auto sel_t1 = std::chrono::steady_clock::now();
+              diag->time_indexed_selective_ms +=
+                std::chrono::duration<double, std::milli>(sel_t1 - sel_t0).count();
+              diag->time_selective_seek_init_ms += selective_timings_ptr->time_seek_init_ms;
+              diag->time_selective_inflate_ms += selective_timings_ptr->time_inflate_ms;
+              diag->time_selective_parse_ms += selective_timings_ptr->time_parse_ms;
+              diag->time_selective_line_split_ms += selective_timings_ptr->time_line_split_ms;
+              diag->time_selective_materialize_ms += selective_timings_ptr->time_materialize_ms;
+              diag->time_selective_callback_ms += selective_timings_ptr->time_callback_ms;
+            }
+            #endif
           }
         } catch (const std::exception& e) {
+          #ifdef FASTQINDEXR_TIMING
           recordExtractFailure(diag, e.what());
+          #endif
           fell_back = true;
           break;
         } catch (...) {
+          #ifdef FASTQINDEXR_TIMING
           recordExtractFailure(diag, "Unknown indexed extraction failure.");
+          #endif
           fell_back = true;
           break;
         }
@@ -1268,8 +1759,11 @@ SEXP buildDNAStringSetFromRequested(
           requested_set,
           bundle.record_offsets[file_idx],
           &selected_global,
-          false,
+          false
+          #ifdef FASTQINDEXR_TIMING
+          ,
           diag
+          #endif
         );
         for (auto rec_local : local_ids) {
           const std::uint64_t gid = bundle.record_offsets[file_idx] + rec_local;
@@ -1466,7 +1960,7 @@ Rcpp::List cpp_extract_sequences(
   SEXP index_ptr_sexp,
   bool include_qual,
   double max_bridge_gap,
-  double max_region_bytes,
+  double max_region_records,
   std::string extract_mode,
   bool diagnostics
 ) {
@@ -1482,10 +1976,12 @@ Rcpp::List cpp_extract_sequences(
     throw std::runtime_error("Override `file` must contain same file count as index.");
   }
   const std::uint64_t bridge_gap = parseNonNegativeWhole(max_bridge_gap, "max_bridge_gap");
-  const std::uint64_t region_bytes = parsePositiveWhole(max_region_bytes, "max_region_bytes");
+  const std::uint64_t region_records = parsePositiveWhole(max_region_records, "max_region_records");
   const ExtractExecutionMode mode = parseExtractExecutionMode(extract_mode);
+  #ifdef FASTQINDEXR_TIMING
   ExtractionDiagnostics diag;
-  ExtractionDiagnostics* diag_ptr = diagnostics ? &diag : nullptr;
+  ExtractionDiagnostics* diag_ptr = diagnosticsPtrIfEnabled(&diag, diagnostics);
+  #endif
 
   const bool return_qual = (bundle.format == "fastq" && include_qual);
   if (ids_zero_based.size() < 1) {
@@ -1523,47 +2019,42 @@ Rcpp::List cpp_extract_sequences(
   }
   std::sort(unique_ids.begin(), unique_ids.end());
 
-  constexpr std::size_t kChunkUniqueIds = 50000;
   const bool need_parsed_qual = (bundle.format == "fastq" && include_qual);
-  for (std::size_t start = 0; start < unique_ids.size(); start += kChunkUniqueIds) {
-    const std::size_t end = std::min(start + kChunkUniqueIds, unique_ids.size());
-    std::vector<std::uint64_t> chunk_ids(
-      unique_ids.begin() + static_cast<std::ptrdiff_t>(start),
-      unique_ids.begin() + static_cast<std::ptrdiff_t>(end)
-    );
-    const SelectedRecordMap selected_chunk = collectRequestedRecords(
-      files,
-      bundle,
-      chunk_ids,
-      need_parsed_qual,
-      bridge_gap,
-      region_bytes,
-      mode,
-      diag_ptr
-    );
-    for (std::uint64_t gid : chunk_ids) {
-      auto rec_it = selected_chunk.find(gid);
-      if (rec_it == selected_chunk.end()) {
-        throw std::runtime_error("Could not resolve all requested ids with provided index/files.");
-      }
-      const ParsedRecord& rec = rec_it->second;
-      SEXP id_ch = Rf_mkCharLen(rec.id.c_str(), static_cast<int>(rec.id.size()));
-      SEXP seq_ch = Rf_mkCharLen(rec.seq.c_str(), static_cast<int>(rec.seq.size()));
-      SEXP qual_ch = R_NilValue;
-      if (return_qual) {
-        qual_ch = Rf_mkCharLen(rec.qual.c_str(), static_cast<int>(rec.qual.size()));
-      }
+  const SelectedRecordMap selected_global = collectRequestedRecords(
+    files,
+    bundle,
+    unique_ids,
+    need_parsed_qual,
+    bridge_gap,
+    region_records,
+    mode
+    #ifdef FASTQINDEXR_TIMING
+    ,
+    diag_ptr
+    #endif
+  );
+  for (std::uint64_t gid : unique_ids) {
+    auto rec_it = selected_global.find(gid);
+    if (rec_it == selected_global.end()) {
+      throw std::runtime_error("Could not resolve all requested ids with provided index/files.");
+    }
+    const ParsedRecord& rec = rec_it->second;
+    SEXP id_ch = Rf_mkCharLen(rec.id.c_str(), static_cast<int>(rec.id.size()));
+    SEXP seq_ch = Rf_mkCharLen(rec.seq.c_str(), static_cast<int>(rec.seq.size()));
+    SEXP qual_ch = R_NilValue;
+    if (return_qual) {
+      qual_ch = Rf_mkCharLen(rec.qual.c_str(), static_cast<int>(rec.qual.size()));
+    }
 
-      const auto pos_it = positions_by_gid.find(gid);
-      if (pos_it == positions_by_gid.end()) {
-        continue;
-      }
-      for (R_xlen_t pos : pos_it->second) {
-        SET_STRING_ELT(out_id, pos, id_ch);
-        SET_STRING_ELT(out_seq, pos, seq_ch);
-        if (return_qual) {
-          SET_STRING_ELT(out_qual, pos, qual_ch);
-        }
+    const auto pos_it = positions_by_gid.find(gid);
+    if (pos_it == positions_by_gid.end()) {
+      continue;
+    }
+    for (R_xlen_t pos : pos_it->second) {
+      SET_STRING_ELT(out_id, pos, id_ch);
+      SET_STRING_ELT(out_seq, pos, seq_ch);
+      if (return_qual) {
+        SET_STRING_ELT(out_qual, pos, qual_ch);
       }
     }
   }
@@ -1574,18 +2065,22 @@ Rcpp::List cpp_extract_sequences(
       Rcpp::Named("seq") = out_seq,
       Rcpp::Named("qual") = out_qual
     );
-    if (diagnostics) {
+    #ifdef FASTQINDEXR_TIMING
+    if (diagnostics && diag_ptr != nullptr) {
       out.attr("fastqindexr_diagnostics") = diagnosticsToList(diag);
     }
+    #endif
     return out;
   }
   Rcpp::List out = Rcpp::List::create(
     Rcpp::Named("seq_id") = out_id,
     Rcpp::Named("seq") = out_seq
   );
-  if (diagnostics) {
+  #ifdef FASTQINDEXR_TIMING
+  if (diagnostics && diag_ptr != nullptr) {
     out.attr("fastqindexr_diagnostics") = diagnosticsToList(diag);
   }
+  #endif
   return out;
 }
 
@@ -1600,7 +2095,7 @@ Rcpp::List cpp_extract_sequences_to_file(
   bool append,
   bool compress,
   double max_bridge_gap,
-  double max_region_bytes,
+  double max_region_records,
   std::string extract_mode,
   bool diagnostics
 ) {
@@ -1616,15 +2111,19 @@ Rcpp::List cpp_extract_sequences_to_file(
     throw std::runtime_error("Override `file` must contain same file count as index.");
   }
   const std::uint64_t bridge_gap = parseNonNegativeWhole(max_bridge_gap, "max_bridge_gap");
-  const std::uint64_t region_bytes = parsePositiveWhole(max_region_bytes, "max_region_bytes");
+  const std::uint64_t region_records = parsePositiveWhole(max_region_records, "max_region_records");
   const ExtractExecutionMode mode = parseExtractExecutionMode(extract_mode);
+  #ifdef FASTQINDEXR_TIMING
   ExtractionDiagnostics diag;
-  ExtractionDiagnostics* diag_ptr = diagnostics ? &diag : nullptr;
+  ExtractionDiagnostics* diag_ptr = diagnosticsPtrIfEnabled(&diag, diagnostics);
+  #endif
   if (ids_zero_based.size() < 1) {
     Rcpp::List out = Rcpp::List::create(Rcpp::Named("written") = 0.0);
-    if (diagnostics) {
+    #ifdef FASTQINDEXR_TIMING
+    if (diagnostics && diag_ptr != nullptr) {
       out.attr("fastqindexr_diagnostics") = diagnosticsToList(diag);
     }
+    #endif
     return out;
   }
 
@@ -1641,14 +2140,19 @@ Rcpp::List cpp_extract_sequences_to_file(
       outfile,
       compress,
       bridge_gap,
-      region_bytes,
-      mode,
+      region_records,
+      mode
+      #ifdef FASTQINDEXR_TIMING
+      ,
       diag_ptr
+      #endif
     );
     Rcpp::List out = Rcpp::List::create(Rcpp::Named("written") = written);
-    if (diagnostics) {
+    #ifdef FASTQINDEXR_TIMING
+    if (diagnostics && diag_ptr != nullptr) {
       out.attr("fastqindexr_diagnostics") = diagnosticsToList(diag);
     }
+    #endif
     return out;
   }
 
@@ -1658,9 +2162,12 @@ Rcpp::List cpp_extract_sequences_to_file(
     requested,
     need_parsed_qual,
     bridge_gap,
-    region_bytes,
-    mode,
+    region_records,
+    mode
+    #ifdef FASTQINDEXR_TIMING
+    ,
     diag_ptr
+    #endif
   );
 
   std::unique_ptr<OutputWriter> writer;
@@ -1682,9 +2189,11 @@ Rcpp::List cpp_extract_sequences_to_file(
   Rcpp::List out = Rcpp::List::create(
     Rcpp::Named("written") = static_cast<double>(written)
   );
-  if (diagnostics) {
+  #ifdef FASTQINDEXR_TIMING
+  if (diagnostics && diag_ptr != nullptr) {
     out.attr("fastqindexr_diagnostics") = diagnosticsToList(diag);
   }
+  #endif
   return out;
 }
 
@@ -1696,7 +2205,7 @@ SEXP cpp_extract_sequences_dnastringset(
   SEXP index_ptr_sexp,
   double chunk_chars,
   double max_bridge_gap,
-  double max_region_bytes,
+  double max_region_records,
   std::string extract_mode,
   bool diagnostics,
   std::string renumber_mode
@@ -1716,10 +2225,12 @@ SEXP cpp_extract_sequences_dnastringset(
     throw std::runtime_error("`chunk_chars` must be a finite positive value.");
   }
   const std::uint64_t bridge_gap = parseNonNegativeWhole(max_bridge_gap, "max_bridge_gap");
-  const std::uint64_t region_bytes = parsePositiveWhole(max_region_bytes, "max_region_bytes");
+  const std::uint64_t region_records = parsePositiveWhole(max_region_records, "max_region_records");
   const ExtractExecutionMode mode = parseExtractExecutionMode(extract_mode);
+  #ifdef FASTQINDEXR_TIMING
   ExtractionDiagnostics diag;
-  ExtractionDiagnostics* diag_ptr = diagnostics ? &diag : nullptr;
+  ExtractionDiagnostics* diag_ptr = diagnosticsPtrIfEnabled(&diag, diagnostics);
+  #endif
   if (renumber_mode != "none" &&
       renumber_mode != "zero_based" &&
       renumber_mode != "one_based") {
@@ -1729,9 +2240,11 @@ SEXP cpp_extract_sequences_dnastringset(
     Rcpp::Environment biostrings = Rcpp::Environment::namespace_env("Biostrings");
     Rcpp::Function dna_string_set = biostrings["DNAStringSet"];
     SEXP empty = dna_string_set(Rcpp::CharacterVector(), Rcpp::Named("use.names") = true);
-    if (diagnostics) {
+    #ifdef FASTQINDEXR_TIMING
+    if (diagnostics && diag_ptr != nullptr) {
       Rf_setAttrib(empty, Rf_install("fastqindexr_diagnostics"), diagnosticsToList(diag));
     }
+    #endif
     return empty;
   }
 
@@ -1743,12 +2256,17 @@ SEXP cpp_extract_sequences_dnastringset(
     static_cast<std::uint64_t>(chunk_chars),
     renumber_mode,
     bridge_gap,
-    region_bytes,
-    mode,
+    region_records,
+    mode
+    #ifdef FASTQINDEXR_TIMING
+    ,
     diag_ptr
+    #endif
   );
-  if (diagnostics) {
+  #ifdef FASTQINDEXR_TIMING
+  if (diagnostics && diag_ptr != nullptr) {
     Rf_setAttrib(out, Rf_install("fastqindexr_diagnostics"), diagnosticsToList(diag));
   }
+  #endif
   return out;
 }

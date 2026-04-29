@@ -17,15 +17,15 @@ cpp_index_ptr_is_valid <- function(index_ptr) {
     .Call(`_fastqindexr_cpp_index_ptr_is_valid`, index_ptr)
 }
 
-cpp_extract_sequences <- function(files, type, ids_zero_based, index_ptr_sexp, include_qual, max_bridge_gap, max_region_bytes, extract_mode, diagnostics) {
-    .Call(`_fastqindexr_cpp_extract_sequences`, files, type, ids_zero_based, index_ptr_sexp, include_qual, max_bridge_gap, max_region_bytes, extract_mode, diagnostics)
+cpp_extract_sequences <- function(files, type, ids_zero_based, index_ptr_sexp, include_qual, max_bridge_gap, max_region_records, extract_mode, diagnostics) {
+    .Call(`_fastqindexr_cpp_extract_sequences`, files, type, ids_zero_based, index_ptr_sexp, include_qual, max_bridge_gap, max_region_records, extract_mode, diagnostics)
 }
 
-cpp_extract_sequences_to_file <- function(files, source_type, ids_zero_based, index_ptr_sexp, output_type, outfile, append, compress, max_bridge_gap, max_region_bytes, extract_mode, diagnostics) {
-    .Call(`_fastqindexr_cpp_extract_sequences_to_file`, files, source_type, ids_zero_based, index_ptr_sexp, output_type, outfile, append, compress, max_bridge_gap, max_region_bytes, extract_mode, diagnostics)
+cpp_extract_sequences_to_file <- function(files, source_type, ids_zero_based, index_ptr_sexp, output_type, outfile, append, compress, max_bridge_gap, max_region_records, extract_mode, diagnostics) {
+    .Call(`_fastqindexr_cpp_extract_sequences_to_file`, files, source_type, ids_zero_based, index_ptr_sexp, output_type, outfile, append, compress, max_bridge_gap, max_region_records, extract_mode, diagnostics)
 }
 
-cpp_extract_sequences_dnastringset <- function(files, source_type, ids_zero_based, index_ptr_sexp, chunk_chars, max_bridge_gap, max_region_bytes, extract_mode, diagnostics, renumber_mode) {
-    .Call(`_fastqindexr_cpp_extract_sequences_dnastringset`, files, source_type, ids_zero_based, index_ptr_sexp, chunk_chars, max_bridge_gap, max_region_bytes, extract_mode, diagnostics, renumber_mode)
+cpp_extract_sequences_dnastringset <- function(files, source_type, ids_zero_based, index_ptr_sexp, chunk_chars, max_bridge_gap, max_region_records, extract_mode, diagnostics, renumber_mode) {
+    .Call(`_fastqindexr_cpp_extract_sequences_dnastringset`, files, source_type, ids_zero_based, index_ptr_sexp, chunk_chars, max_bridge_gap, max_region_records, extract_mode, diagnostics, renumber_mode)
 }
 

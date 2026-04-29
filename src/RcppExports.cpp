@@ -58,8 +58,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // cpp_extract_sequences
-Rcpp::List cpp_extract_sequences(Rcpp::CharacterVector files, std::string type, Rcpp::NumericVector ids_zero_based, SEXP index_ptr_sexp, bool include_qual, double max_bridge_gap, double max_region_bytes, std::string extract_mode, bool diagnostics);
-RcppExport SEXP _fastqindexr_cpp_extract_sequences(SEXP filesSEXP, SEXP typeSEXP, SEXP ids_zero_basedSEXP, SEXP index_ptr_sexpSEXP, SEXP include_qualSEXP, SEXP max_bridge_gapSEXP, SEXP max_region_bytesSEXP, SEXP extract_modeSEXP, SEXP diagnosticsSEXP) {
+Rcpp::List cpp_extract_sequences(Rcpp::CharacterVector files, std::string type, Rcpp::NumericVector ids_zero_based, SEXP index_ptr_sexp, bool include_qual, double max_bridge_gap, double max_region_records, std::string extract_mode, bool diagnostics);
+RcppExport SEXP _fastqindexr_cpp_extract_sequences(SEXP filesSEXP, SEXP typeSEXP, SEXP ids_zero_basedSEXP, SEXP index_ptr_sexpSEXP, SEXP include_qualSEXP, SEXP max_bridge_gapSEXP, SEXP max_region_recordsSEXP, SEXP extract_modeSEXP, SEXP diagnosticsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -69,16 +69,16 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< SEXP >::type index_ptr_sexp(index_ptr_sexpSEXP);
     Rcpp::traits::input_parameter< bool >::type include_qual(include_qualSEXP);
     Rcpp::traits::input_parameter< double >::type max_bridge_gap(max_bridge_gapSEXP);
-    Rcpp::traits::input_parameter< double >::type max_region_bytes(max_region_bytesSEXP);
+    Rcpp::traits::input_parameter< double >::type max_region_records(max_region_recordsSEXP);
     Rcpp::traits::input_parameter< std::string >::type extract_mode(extract_modeSEXP);
     Rcpp::traits::input_parameter< bool >::type diagnostics(diagnosticsSEXP);
-    rcpp_result_gen = Rcpp::wrap(cpp_extract_sequences(files, type, ids_zero_based, index_ptr_sexp, include_qual, max_bridge_gap, max_region_bytes, extract_mode, diagnostics));
+    rcpp_result_gen = Rcpp::wrap(cpp_extract_sequences(files, type, ids_zero_based, index_ptr_sexp, include_qual, max_bridge_gap, max_region_records, extract_mode, diagnostics));
     return rcpp_result_gen;
 END_RCPP
 }
 // cpp_extract_sequences_to_file
-Rcpp::List cpp_extract_sequences_to_file(Rcpp::CharacterVector files, std::string source_type, Rcpp::NumericVector ids_zero_based, SEXP index_ptr_sexp, std::string output_type, std::string outfile, bool append, bool compress, double max_bridge_gap, double max_region_bytes, std::string extract_mode, bool diagnostics);
-RcppExport SEXP _fastqindexr_cpp_extract_sequences_to_file(SEXP filesSEXP, SEXP source_typeSEXP, SEXP ids_zero_basedSEXP, SEXP index_ptr_sexpSEXP, SEXP output_typeSEXP, SEXP outfileSEXP, SEXP appendSEXP, SEXP compressSEXP, SEXP max_bridge_gapSEXP, SEXP max_region_bytesSEXP, SEXP extract_modeSEXP, SEXP diagnosticsSEXP) {
+Rcpp::List cpp_extract_sequences_to_file(Rcpp::CharacterVector files, std::string source_type, Rcpp::NumericVector ids_zero_based, SEXP index_ptr_sexp, std::string output_type, std::string outfile, bool append, bool compress, double max_bridge_gap, double max_region_records, std::string extract_mode, bool diagnostics);
+RcppExport SEXP _fastqindexr_cpp_extract_sequences_to_file(SEXP filesSEXP, SEXP source_typeSEXP, SEXP ids_zero_basedSEXP, SEXP index_ptr_sexpSEXP, SEXP output_typeSEXP, SEXP outfileSEXP, SEXP appendSEXP, SEXP compressSEXP, SEXP max_bridge_gapSEXP, SEXP max_region_recordsSEXP, SEXP extract_modeSEXP, SEXP diagnosticsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -91,16 +91,16 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type append(appendSEXP);
     Rcpp::traits::input_parameter< bool >::type compress(compressSEXP);
     Rcpp::traits::input_parameter< double >::type max_bridge_gap(max_bridge_gapSEXP);
-    Rcpp::traits::input_parameter< double >::type max_region_bytes(max_region_bytesSEXP);
+    Rcpp::traits::input_parameter< double >::type max_region_records(max_region_recordsSEXP);
     Rcpp::traits::input_parameter< std::string >::type extract_mode(extract_modeSEXP);
     Rcpp::traits::input_parameter< bool >::type diagnostics(diagnosticsSEXP);
-    rcpp_result_gen = Rcpp::wrap(cpp_extract_sequences_to_file(files, source_type, ids_zero_based, index_ptr_sexp, output_type, outfile, append, compress, max_bridge_gap, max_region_bytes, extract_mode, diagnostics));
+    rcpp_result_gen = Rcpp::wrap(cpp_extract_sequences_to_file(files, source_type, ids_zero_based, index_ptr_sexp, output_type, outfile, append, compress, max_bridge_gap, max_region_records, extract_mode, diagnostics));
     return rcpp_result_gen;
 END_RCPP
 }
 // cpp_extract_sequences_dnastringset
-SEXP cpp_extract_sequences_dnastringset(Rcpp::CharacterVector files, std::string source_type, Rcpp::NumericVector ids_zero_based, SEXP index_ptr_sexp, double chunk_chars, double max_bridge_gap, double max_region_bytes, std::string extract_mode, bool diagnostics, std::string renumber_mode);
-RcppExport SEXP _fastqindexr_cpp_extract_sequences_dnastringset(SEXP filesSEXP, SEXP source_typeSEXP, SEXP ids_zero_basedSEXP, SEXP index_ptr_sexpSEXP, SEXP chunk_charsSEXP, SEXP max_bridge_gapSEXP, SEXP max_region_bytesSEXP, SEXP extract_modeSEXP, SEXP diagnosticsSEXP, SEXP renumber_modeSEXP) {
+SEXP cpp_extract_sequences_dnastringset(Rcpp::CharacterVector files, std::string source_type, Rcpp::NumericVector ids_zero_based, SEXP index_ptr_sexp, double chunk_chars, double max_bridge_gap, double max_region_records, std::string extract_mode, bool diagnostics, std::string renumber_mode);
+RcppExport SEXP _fastqindexr_cpp_extract_sequences_dnastringset(SEXP filesSEXP, SEXP source_typeSEXP, SEXP ids_zero_basedSEXP, SEXP index_ptr_sexpSEXP, SEXP chunk_charsSEXP, SEXP max_bridge_gapSEXP, SEXP max_region_recordsSEXP, SEXP extract_modeSEXP, SEXP diagnosticsSEXP, SEXP renumber_modeSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -110,11 +110,11 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< SEXP >::type index_ptr_sexp(index_ptr_sexpSEXP);
     Rcpp::traits::input_parameter< double >::type chunk_chars(chunk_charsSEXP);
     Rcpp::traits::input_parameter< double >::type max_bridge_gap(max_bridge_gapSEXP);
-    Rcpp::traits::input_parameter< double >::type max_region_bytes(max_region_bytesSEXP);
+    Rcpp::traits::input_parameter< double >::type max_region_records(max_region_recordsSEXP);
     Rcpp::traits::input_parameter< std::string >::type extract_mode(extract_modeSEXP);
     Rcpp::traits::input_parameter< bool >::type diagnostics(diagnosticsSEXP);
     Rcpp::traits::input_parameter< std::string >::type renumber_mode(renumber_modeSEXP);
-    rcpp_result_gen = Rcpp::wrap(cpp_extract_sequences_dnastringset(files, source_type, ids_zero_based, index_ptr_sexp, chunk_chars, max_bridge_gap, max_region_bytes, extract_mode, diagnostics, renumber_mode));
+    rcpp_result_gen = Rcpp::wrap(cpp_extract_sequences_dnastringset(files, source_type, ids_zero_based, index_ptr_sexp, chunk_chars, max_bridge_gap, max_region_records, extract_mode, diagnostics, renumber_mode));
     return rcpp_result_gen;
 END_RCPP
 }

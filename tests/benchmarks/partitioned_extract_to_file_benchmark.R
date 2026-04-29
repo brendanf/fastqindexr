@@ -1,13 +1,25 @@
 #!/usr/bin/env Rscript
 # After default partition timings, runs a **small matrix** of
-# `fastqindexr.max_bridge_gap` x `fastqindexr.max_region_bytes` on the same
+# `fastqindexr.max_bridge_gap` x `fastqindexr.max_region_records` on the same
 # partitions (moderate grid, no pathological tiny caps).
 
 pkgload::load_all(".", quiet = TRUE)
 
-tmp <- tempfile(fileext = ".fa.gz")
-on.exit(unlink(tmp), add = TRUE)
-make_benchmark_fasta(tmp, n = 250000L, width = 60L)
+bench_cache_file <- function(name) {
+  cache_dir <- file.path("tests", "benchmarks", "cache")
+  if (!dir.exists(cache_dir)) {
+    dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+  }
+  file.path(cache_dir, name)
+}
+
+tmp <- bench_cache_file("benchmark_250k_w60.fa.gz")
+if (!file.exists(tmp)) {
+  cat("generating test sequences (cache miss)\n")
+  make_benchmark_fasta(tmp, n = 250000L, width = 60L)
+} else {
+  cat("using cached test sequences\n")
+}
 idx <- create_index(tmp, type = "fasta")
 
 ids <- seq_len(200000L)
@@ -48,13 +60,13 @@ bench_partition_with_tuning <- function(
   label,
   partitions,
   max_bridge_gap = 64,
-  max_region_bytes = 2147483647,
+  max_region_records = 2147483647,
   extract_mode = "indexed",
   diagnostics = TRUE
 ) {
   old_opts <- options(
     fastqindexr.max_bridge_gap = max_bridge_gap,
-    fastqindexr.max_region_bytes = max_region_bytes,
+    fastqindexr.max_region_records = max_region_records,
     fastqindexr.extract_mode = extract_mode,
     fastqindexr.extract_diagnostics = diagnostics
   )
@@ -65,7 +77,7 @@ bench_partition_with_tuning <- function(
 bench_partition_matrix <- function(label_prefix, partitions, tuning_grid) {
   for (i in seq_len(nrow(tuning_grid))) {
     bridge <- tuning_grid$max_bridge_gap[[i]]
-    region <- tuning_grid$max_region_bytes[[i]]
+    region <- tuning_grid$max_region_records[[i]]
     lab <- sprintf(
       "%s mode=%s b=%s r=%s",
       label_prefix,
@@ -99,7 +111,7 @@ bench_partition_mode_compare("mode_compare_round_robin-8", rr)
 
 tuning_grid <- expand.grid(
   max_bridge_gap = c(0, 64, 256),
-  max_region_bytes = c(500000, 2000000, 2147483647),
+  max_region_records = c(500000, 2000000, 2147483647),
   stringsAsFactors = FALSE
 )
 
