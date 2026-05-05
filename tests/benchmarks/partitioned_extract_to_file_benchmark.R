@@ -21,6 +21,14 @@ if (!file.exists(tmp)) {
   cat("using cached test sequences\n")
 }
 idx <- create_index(tmp, type = "fasta")
+idx_gz <- idx
+
+tmp_plain <- bench_cache_file("benchmark_250k_w60.fa")
+if (!file.exists(tmp_plain)) {
+  cat("creating plain FASTA benchmark cache\n")
+  make_benchmark_fasta(tmp_plain, n = 250000L, width = 60L)
+}
+idx_plain <- create_index(tmp_plain, type = "fasta")
 
 ids <- seq_len(200000L)
 cont <- partition_seq_idx(ids, n_parts = 8L, strategy = "contiguous")
@@ -112,6 +120,12 @@ bench_partition_with_tuning("round_robin-8/default", rr)
 cat("execution-mode baseline comparison\n")
 bench_partition_mode_compare("mode_compare_contiguous-8", cont)
 bench_partition_mode_compare("mode_compare_round_robin-8", rr)
+
+cat("plain FASTA execution-mode baseline comparison\n")
+idx <- idx_plain
+bench_partition_mode_compare("plain_mode_compare_contiguous-8", cont)
+bench_partition_mode_compare("plain_mode_compare_round_robin-8", rr)
+idx <- idx_gz
 
 tuning_grid <- expand.grid(
   max_bridge_gap = c(0, 64, 256),

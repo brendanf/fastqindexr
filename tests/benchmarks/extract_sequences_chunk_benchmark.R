@@ -123,6 +123,13 @@ if (!file.exists(tmp)) {
 cat("creating index\n")
 idx <- create_index(tmp, type = "fasta")
 
+tmp_plain <- bench_cache_file("benchmark_1m_w600.fa")
+if (!file.exists(tmp_plain)) {
+  cat("creating plain FASTA benchmark cache\n")
+  make_benchmark_fasta(tmp_plain, n = 1000000L, width = 600L)
+}
+idx_plain <- create_index(tmp_plain, type = "fasta")
+
 cat("extract_sequences chunked-unique backend benchmark\n")
 
 ordered_unique <- seq_len(300000L)
@@ -211,3 +218,11 @@ set.seed(3L)
 perm_unique <- sample.int(1000000L, 300000L, replace = FALSE)
 bench_with_tuning("permuted_unique/default", idx, perm_unique, "data.frame")
 bench_with_tuning("permuted_unique/default", idx, perm_unique, "seq")
+
+cat("plain FASTA mode comparison\n")
+set.seed(23L)
+bench_mode_compare(
+  idx_plain,
+  "plain_mode_compare_perm1000",
+  sample.int(1000000L, 1000L, replace = FALSE)
+)

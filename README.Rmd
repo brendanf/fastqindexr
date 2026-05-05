@@ -84,22 +84,36 @@ unlink(c(path, out))
 
 ## Benchmarking
 
-The script below loops over compression mode (`gzip` / `plain`), request
-pattern, and operation (`index` / `extract`), captures results in a data frame,
-and plots average timings.
+The [`Biostrings` package from Bioconductor](https://bioconductor.org/packages/Biostrings/)
+also provides an implementation of FASTA indexing and extraction via its 
+`fasta.index()` function.  The indexes produced by `fasta.index()` can be
+subset and supplied as the `file` argument to `readDNAStringSet()` (or the
+equivalent B/RNA/AA versions) to read arbitrary subsets of sequences. The
+`fasta.index()` indexes include more details about the sequences, including
+sequence names and lengths, which may be useful for some applications. However,
+the `readXStringSet()` functions cannot seek inside gzipped files, and so they
+are very slow at random-access extraction from gzipped files.
+
+Here is a benchmark comparing the two implementations, for different access
+patterns and compression modes.
 
 ```{r benchmark}
 # Install Biostrings if not already installed.
 # install.packages("BiocManager")
 # BiocManager::install("Biostrings")
+library(Biostrings)
+library(fastqindexr)
 
 set.seed(1)
 n_records <- 10000L
 n_extract <- 2000L
 
-# three different request patterns in increasing order of difficulty:
-# contiguous range, sorted non-contiguous unique, and unsorted non-contiguous
-# with duplicates.
+# Three different request patterns in increasing order of difficulty:
+# 1) A contiguous range of 2000 records, but not at the beginning;
+# 2) 2000 unique records, randomly scattered through the file but in increasing
+#    order;
+# 3) 2000 randomly selected records, including potential duplicates, in
+#    arbitrary order.
 
 requests <- list(
   contiguous = (n_records %/% 2) + seq_len(n_extract),
@@ -123,6 +137,7 @@ for (comp in c("gzip", "plain")) {
   }
   tmp <- tempfile(fileext = fileext)
   make_benchmark_fasta(tmp, n = n_records, width = 120)
+  
   # loop over implementations (fastqindexr / Biostrings)
   for (impl in c("fastqindexr", "Biostrings")) {
     index_time <- system.time(

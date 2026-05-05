@@ -85,22 +85,38 @@ unlink(c(path, out))
 
 ## Benchmarking
 
-The script below loops over compression mode (`gzip` / `plain`), request
-pattern, and operation (`index` / `extract`), captures results in a data
-frame, and plots average timings.
+The [`Biostrings` package from
+Bioconductor](https://bioconductor.org/packages/Biostrings/) also
+provides an implementation of FASTA indexing and extraction via its
+`fasta.index()` function. The indexes produced by `fasta.index()` can be
+subset and supplied as the `file` argument to `readDNAStringSet()` (or
+the equivalent B/RNA/AA versions) to read arbitrary subsets of
+sequences. The `fasta.index()` indexes include more details about the
+sequences, including sequence names and lengths, which may be useful for
+some applications. However, the `readXStringSet()` functions cannot seek
+inside gzipped files, and so they are very slow at random-access
+extraction from gzipped files.
+
+Here is a benchmark comparing the two implementations, for different
+access patterns and compression modes.
 
 ``` r
 # Install Biostrings if not already installed.
 # install.packages("BiocManager")
 # BiocManager::install("Biostrings")
+library(Biostrings)
+library(fastqindexr)
 
 set.seed(1)
 n_records <- 10000L
 n_extract <- 2000L
 
-# three different request patterns in increasing order of difficulty:
-# contiguous range, sorted non-contiguous unique, and unsorted non-contiguous
-# with duplicates.
+# Three different request patterns in increasing order of difficulty:
+# 1) A contiguous range of 2000 records, but not at the beginning;
+# 2) 2000 unique records, randomly scattered through the file but in increasing
+#    order;
+# 3) 2000 randomly selected records, including potential duplicates, in
+#    arbitrary order.
 
 requests <- list(
   contiguous = (n_records %/% 2) + seq_len(n_extract),
@@ -124,6 +140,7 @@ for (comp in c("gzip", "plain")) {
   }
   tmp <- tempfile(fileext = fileext)
   make_benchmark_fasta(tmp, n = n_records, width = 120)
+  
   # loop over implementations (fastqindexr / Biostrings)
   for (impl in c("fastqindexr", "Biostrings")) {
     index_time <- system.time(
@@ -170,22 +187,22 @@ for (comp in c("gzip", "plain")) {
 
 benchmarks
 #>    compression implementation     operation elapsed
-#> 1         gzip    fastqindexr         index   0.009
+#> 1         gzip    fastqindexr         index   0.011
 #> 2         gzip    fastqindexr    contiguous   0.006
-#> 3         gzip    fastqindexr sorted_unique   0.009
-#> 4         gzip    fastqindexr  unsorted_dup   0.009
-#> 5         gzip     Biostrings         index   0.009
-#> 6         gzip     Biostrings    contiguous   0.006
-#> 7         gzip     Biostrings sorted_unique   3.849
-#> 8         gzip     Biostrings  unsorted_dup   3.545
-#> 9        plain    fastqindexr         index   0.020
-#> 10       plain    fastqindexr    contiguous   0.017
-#> 11       plain    fastqindexr sorted_unique   0.017
-#> 12       plain    fastqindexr  unsorted_dup   0.016
-#> 13       plain     Biostrings         index   0.004
+#> 3         gzip    fastqindexr sorted_unique   0.012
+#> 4         gzip    fastqindexr  unsorted_dup   0.015
+#> 5         gzip     Biostrings         index   0.012
+#> 6         gzip     Biostrings    contiguous   0.010
+#> 7         gzip     Biostrings sorted_unique   5.205
+#> 8         gzip     Biostrings  unsorted_dup   4.765
+#> 9        plain    fastqindexr         index   0.002
+#> 10       plain    fastqindexr    contiguous   0.004
+#> 11       plain    fastqindexr sorted_unique   0.009
+#> 12       plain    fastqindexr  unsorted_dup   0.009
+#> 13       plain     Biostrings         index   0.005
 #> 14       plain     Biostrings    contiguous   0.003
-#> 15       plain     Biostrings sorted_unique   0.008
-#> 16       plain     Biostrings  unsorted_dup   0.008
+#> 15       plain     Biostrings sorted_unique   0.013
+#> 16       plain     Biostrings  unsorted_dup   0.015
 ```
 
 Although `fastqindexr` supports extracting from both gzipped and plain

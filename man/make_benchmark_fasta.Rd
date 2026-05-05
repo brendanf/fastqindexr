@@ -2,7 +2,7 @@
 % Please edit documentation in R/make_benchmark_fasta.R
 \name{make_benchmark_fasta}
 \alias{make_benchmark_fasta}
-\title{Write a synthetic gzipped FASTA file for benchmarking}
+\title{Write a synthetic FASTA file for benchmarking}
 \usage{
 make_benchmark_fasta(
   path,
@@ -12,7 +12,8 @@ make_benchmark_fasta(
 )
 }
 \arguments{
-\item{path}{Output file path, typically ending in \code{.fa.gz} or \code{.fasta.gz}.}
+\item{path}{Output file path. If it ends in \code{.gz} (case-insensitive), output
+is gzip-compressed; otherwise, plain text FASTA is written.}
 
 \item{n}{Number of FASTA records to write.}
 
@@ -28,7 +29,7 @@ Creates a FASTA file where each record has a deterministic ID
 (\code{seq00001}, \code{seq00002}, ...) and a randomly sampled DNA sequence.
 }
 \examples{
-path <- tempfile(fileext = ".fa.gz")
+path <- tempfile(fileext = ".fa")
 make_benchmark_fasta(path, n = 3, width = 10)
 file.exists(path)
 unlink(path)

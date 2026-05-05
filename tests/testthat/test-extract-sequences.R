@@ -9,6 +9,20 @@ test_that("extract_sequences preserves input order and duplicates for FASTA", {
   expect_equal(out$seq, c("GGGG", "AAAA", "GGGG"))
 })
 
+test_that("plain indexed extraction preserves order and duplicates", {
+  path <- tempfile(fileext = ".fa")
+  on.exit(unlink(path), add = TRUE)
+  writeLines(
+    c(">seq1", "AAAA", ">seq2", "CCCC", ">seq3", "GGGG", ">seq4", "TTTT"),
+    path
+  )
+  idx <- create_index(path, type = "fasta")
+
+  out <- extract_sequences(idx, c(3, 1, 3, 2), mode = "indexed")
+  expect_equal(out$seq_id, c("seq3", "seq1", "seq3", "seq2"))
+  expect_equal(out$seq, c("GGGG", "AAAA", "GGGG", "CCCC"))
+})
+
 test_that("extract_sequences returns quality for FASTQ", {
   path <- tempfile(fileext = ".fq.gz")
   make_fastq_gz(path)
@@ -323,7 +337,9 @@ test_that("diagnostics attributes are exposed when enabled", {
   res <- extract_sequences(idx, c(1L, 50L, 150L), return = "list")
   diag <- attr(res, "fastqindexr_diagnostics", exact = TRUE)
   if (is.null(diag)) {
-    skip("Diagnostics require building with -DFASTQINDEXR_TIMING in PKG_CXXFLAGS.")
+    skip(
+      "Diagnostics require building with -DFASTQINDEXR_TIMING in PKG_CXXFLAGS."
+    )
   }
   expect_true(is.list(diag))
   expect_setequal(

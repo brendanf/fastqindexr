@@ -1205,21 +1205,91 @@ ParsedRecord readOneRecordFromPlainStream(
   };
 }
 
-ParsedRecord readPlainRecordAtOffset(
-  const std::string& path,
-  std::uint64_t byte_offset,
+class PlainIndexedRecordReader {
+ public:
+  explicit PlainIndexedRecordReader(const std::string& path)
+    : path_(path), stream_(path, std::ios::binary) {
+    if (!stream_.good()) {
+      throw std::runtime_error("Could not open plain input: " + path_);
+    }
+  }
+
+  void seekTo(std::uint64_t byte_offset) {
+    stream_.clear();
+    stream_.seekg(static_cast<std::streamoff>(byte_offset), std::ios::beg);
+    if (!stream_.good()) {
+      throw std::runtime_error("Could not seek plain input: " + path_);
+    }
+  }
+
+  ParsedRecord readOne(const std::string& type, bool include_qual) {
+    return readOneRecordFromPlainStream(&stream_, type, include_qual);
+  }
+
+ private:
+  std::string path_;
+  std::ifstream stream_;
+};
+
+template <typename EmitFn>
+void extractPlainIndexedRecords(
+  const std::string& file,
+  const std::vector<std::uint64_t>& local_ids,
+  const std::vector<std::uint64_t>& header_offsets,
   const std::string& type,
-  bool include_qual
+  bool include_qual,
+  std::uint64_t max_bridge_gap,
+  std::uint64_t max_region_records,
+  int record_size,
+  const EmitFn& emit
+  #ifdef FASTQINDEXR_TIMING
+  ,
+  ExtractionDiagnostics* diag
+  #endif
 ) {
-  std::ifstream in(path, std::ios::binary);
-  if (!in.good()) {
-    throw std::runtime_error("Could not open plain input: " + path);
+  if (local_ids.empty()) {
+    return;
   }
-  in.seekg(static_cast<std::streamoff>(byte_offset), std::ios::beg);
-  if (!in.good()) {
-    throw std::runtime_error("Could not seek plain input: " + path);
+  for (auto lid : local_ids) {
+    if (lid >= header_offsets.size()) {
+      throw std::runtime_error("Requested id out of range for plain indexed file.");
+    }
   }
-  return readOneRecordFromPlainStream(&in, type, include_qual);
+
+  PlainIndexedRecordReader reader(file);
+  const auto regions = buildDenseRegionsFromSortedUnique(
+    local_ids,
+    max_bridge_gap,
+    max_region_records,
+    record_size
+    #ifdef FASTQINDEXR_TIMING
+    ,
+    diag
+    #endif
+  );
+
+  for (const auto& rg : regions) {
+    const std::uint64_t region_start = rg.first;
+    const std::uint64_t region_end = rg.second;
+    const auto region_begin = std::lower_bound(local_ids.begin(), local_ids.end(), region_start);
+    const auto region_end_it = std::upper_bound(local_ids.begin(), local_ids.end(), region_end);
+    const std::uint64_t requested_in_region = static_cast<std::uint64_t>(region_end_it - region_begin);
+    const std::uint64_t region_span = region_end - region_start + 1;
+    const bool dense_region = (requested_in_region == region_span);
+
+    if (dense_region) {
+      reader.seekTo(header_offsets[static_cast<size_t>(region_start)]);
+      for (std::uint64_t lid = region_start; lid <= region_end; ++lid) {
+        emit(lid, reader.readOne(type, include_qual));
+      }
+    } else {
+      for (auto it = region_begin; it != region_end_it; ++it) {
+        const std::uint64_t lid = *it;
+        reader.seekTo(header_offsets[static_cast<size_t>(lid)]);
+        emit(lid, reader.readOne(type, include_qual));
+      }
+    }
+  }
 }
 
 std::unique_ptr<PlainIndexedFile> buildPlainFileIndex(const std::string& path, int record_size) {
@@ -1229,21 +1299,31 @@ std::unique_ptr<PlainIndexedFile> buildPlainFileIndex(const std::string& path, i
     throw std::runtime_error("Could not open plain input for indexing: " + path);
   }
   std::uint64_t line_index = 0;
-  std::string line;
+  std::uint64_t file_offset = 0;
+  bool at_line_start = true;
+  std::vector<char> buffer(kGzBufferSize * 8, '\0');
   while (true) {
-    const std::streampos line_start = in.tellg();
-    if (!std::getline(in, line)) {
+    in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    const std::streamsize n_read_s = in.gcount();
+    if (n_read_s <= 0) {
       break;
     }
-    if (line_index % static_cast<std::uint64_t>(record_size) == 0) {
-      if (line_start < 0) {
-        throw std::runtime_error("Could not track byte position in plain file: " + path);
+    const std::size_t n_read = static_cast<std::size_t>(n_read_s);
+    for (std::size_t i = 0; i < n_read; ++i) {
+      if (at_line_start) {
+        if (line_index % static_cast<std::uint64_t>(record_size) == 0) {
+          out->plain_header_byte_offsets.push_back(file_offset + static_cast<std::uint64_t>(i));
+        }
+        at_line_start = false;
       }
-      out->plain_header_byte_offsets.push_back(static_cast<std::uint64_t>(line_start));
+      if (buffer[i] == '\n') {
+        line_index++;
+        at_line_start = true;
+      }
     }
-    if (!line.empty() && line.back() == '\r') {
-      line.pop_back();
-    }
+    file_offset += static_cast<std::uint64_t>(n_read);
+  }
+  if (!at_line_start) {
     line_index++;
   }
   if (line_index % static_cast<std::uint64_t>(record_size) != 0) {
@@ -1324,18 +1404,23 @@ SelectedRecordMap collectRequestedRecords(
     }
     if (isPlainIndexedFile(*bundle.indexed_files[file_idx]) && mode == ExtractExecutionMode::Indexed) {
       const auto& offs = asPlainIndexedFile(*bundle.indexed_files[file_idx]).plain_header_byte_offsets;
-      for (auto lid : local_ids) {
-        if (lid >= offs.size()) {
-          throw std::runtime_error("Requested id out of range for plain indexed file.");
+      extractPlainIndexedRecords(
+        Rcpp::as<std::string>(files[file_idx]),
+        local_ids,
+        offs,
+        bundle.format,
+        need_qual,
+        max_bridge_gap,
+        max_region_records,
+        bundle.record_size,
+        [&](std::uint64_t lid, const ParsedRecord& rec) {
+          selected_global[bundle.record_offsets[file_idx] + lid] = rec;
         }
-        ParsedRecord rec = readPlainRecordAtOffset(
-          Rcpp::as<std::string>(files[file_idx]),
-          offs[static_cast<size_t>(lid)],
-          bundle.format,
-          need_qual
-        );
-        selected_global[bundle.record_offsets[file_idx] + lid] = std::move(rec);
-      }
+        #ifdef FASTQINDEXR_TIMING
+        ,
+        diag
+        #endif
+      );
       continue;
     }
     #ifdef FASTQINDEXR_TIMING
@@ -1666,19 +1751,24 @@ double streamSortedUniqueToFile(
     }
     if (isPlainIndexedFile(*bundle.indexed_files[file_idx]) && mode == ExtractExecutionMode::Indexed) {
       const auto& offs = asPlainIndexedFile(*bundle.indexed_files[file_idx]).plain_header_byte_offsets;
-      for (auto lid : local_ids) {
-        if (lid >= offs.size()) {
-          throw std::runtime_error("Requested id out of range for plain indexed file.");
+      extractPlainIndexedRecords(
+        Rcpp::as<std::string>(files[file_idx]),
+        local_ids,
+        offs,
+        bundle.format,
+        need_qual,
+        max_bridge_gap,
+        max_region_records,
+        bundle.record_size,
+        [&](std::uint64_t, const ParsedRecord& rec) {
+          writer->write(renderRecord(rec, resolved_output_type));
+          n_written++;
         }
-        ParsedRecord rec = readPlainRecordAtOffset(
-          Rcpp::as<std::string>(files[file_idx]),
-          offs[static_cast<size_t>(lid)],
-          bundle.format,
-          need_qual
-        );
-        writer->write(renderRecord(rec, resolved_output_type));
-        n_written++;
-      }
+        #ifdef FASTQINDEXR_TIMING
+        ,
+        diag
+        #endif
+      );
       continue;
     }
     #ifdef FASTQINDEXR_TIMING
@@ -2060,27 +2150,32 @@ SEXP buildDNAStringSetFromRequested(
       }
       if (isPlainIndexedFile(*bundle.indexed_files[file_idx]) && mode == ExtractExecutionMode::Indexed) {
         const auto& offs = asPlainIndexedFile(*bundle.indexed_files[file_idx]).plain_header_byte_offsets;
-        for (auto lid : local_ids) {
-          if (lid >= offs.size()) {
-            throw std::runtime_error("Requested id out of range for plain indexed file.");
+        extractPlainIndexedRecords(
+          Rcpp::as<std::string>(files[file_idx]),
+          local_ids,
+          offs,
+          bundle.format,
+          false,
+          max_bridge_gap,
+          max_region_records,
+          bundle.record_size,
+          [&](std::uint64_t, const ParsedRecord& rec) {
+            appendRecordToDNAChunks(
+              rec,
+              chunk_chars_limit,
+              &seq_chunk,
+              &id_chunk,
+              &chunk_chars,
+              &output_index,
+              &dna_chunks,
+              renumber_mode
+            );
           }
-          ParsedRecord rec = readPlainRecordAtOffset(
-            Rcpp::as<std::string>(files[file_idx]),
-            offs[static_cast<size_t>(lid)],
-            bundle.format,
-            false
-          );
-          appendRecordToDNAChunks(
-            rec,
-            chunk_chars_limit,
-            &seq_chunk,
-            &id_chunk,
-            &chunk_chars,
-            &output_index,
-            &dna_chunks,
-            renumber_mode
-          );
-        }
+          #ifdef FASTQINDEXR_TIMING
+          ,
+          diag
+          #endif
+        );
         continue;
       }
       #ifdef FASTQINDEXR_TIMING
