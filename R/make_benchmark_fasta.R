@@ -1,9 +1,10 @@
-#' Write a synthetic gzipped FASTA file for benchmarking
+#' Write a synthetic FASTA file for benchmarking
 #'
 #' Creates a FASTA file where each record has a deterministic ID
 #' (`seq00001`, `seq00002`, ...) and a randomly sampled DNA sequence.
 #'
-#' @param path Output file path, typically ending in `.fa.gz` or `.fasta.gz`.
+#' @param path Output file path. If it ends in `.gz` (case-insensitive), output
+#'   is gzip-compressed; otherwise, plain text FASTA is written.
 #' @param n Number of FASTA records to write.
 #' @param width Sequence width (bases) per record.
 #' @param alphabet Character vector of symbols used to generate sequence lines.
@@ -11,7 +12,7 @@
 #' @return Invisibly returns `path`.
 #'
 #' @examples
-#' path <- tempfile(fileext = ".fa.gz")
+#' path <- tempfile(fileext = ".fa")
 #' make_benchmark_fasta(path, n = 3, width = 10)
 #' file.exists(path)
 #' unlink(path)
@@ -46,7 +47,12 @@ make_benchmark_fasta <- function(
     )
   }
 
-  con <- gzfile(path, "wt")
+  is_gz <- endsWith(tolower(path), ".gz")
+  con <- if (is_gz) {
+    gzfile(path, "wt")
+  } else {
+    file(path, "wt")
+  }
   on.exit(close(con), add = TRUE)
 
   for (i in seq_len(n)) {

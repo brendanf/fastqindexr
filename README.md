@@ -10,18 +10,21 @@
 coverage](https://codecov.io/gh/brendanf/fastqindexr/graph/badge.svg)](https://app.codecov.io/gh/brendanf/fastqindexr)
 <!-- badges: end -->
 
-`fastqindexr` builds an in-memory index over one or more gzipped
-FASTA/FASTQ files, then extracts records by ID without scanning from the
-beginning each time. You can also read binary `.fqi` indexes produced by
-the FastqIndEx CLI and use them the same way as in-memory indexes. The
-package wraps an Rcpp bridge around adapted open-source
+`fastqindexr` builds an in-memory index over one or more FASTA/FASTQ
+files (gzip-compressed or plain), then extracts records by ID without
+scanning from the beginning each time. A single `create_index()` call
+must use one compression type (all gzip or all plain). You can also read
+binary `.fqi` indexes produced by the FastqIndEx CLI and use them the
+same way as in-memory indexes. The package wraps an Rcpp bridge around
+adapted open-source
 [FastqIndEx](https://github.com/DKFZ-ODCF/FastqIndEx) C++ core
 components. It is not written or maintained by the authors of
 FastqIndEx.
 
 The package is useful when you want to:
 
-- repeatedly sample or subset records from large `.gz` inputs
+- repeatedly sample or subset records from large FASTA/FASTQ inputs
+  (gzip or plain)
 - treat several files as one logical concatenated record stream
 - keep records in R as a `data.frame`, a named `list` of `seq_id` /
   `seq` (and `qual` for FASTQ), or a named character vector of sequences
@@ -82,9 +85,9 @@ unlink(c(path, out))
 
 ## Benchmarking
 
-The following script compares `fastqindexr` to `Biostrings` for building
-an index and extracting from a gzipped FASTA (timings depend on your
-machine).
+The script below loops over compression mode (`gzip` / `plain`), request
+pattern, and operation (`index` / `extract`), captures results in a data
+frame, and plots average timings.
 
 ``` r
 # Install Biostrings if not already installed.
@@ -92,62 +95,126 @@ machine).
 # BiocManager::install("Biostrings")
 
 set.seed(1)
+n_records <- 10000L
+n_extract <- 2000L
 
-tmp <- tempfile(fileext = ".fa.gz")
-make_benchmark_fasta(tmp, n = 10000, width = 120)
-ids <- sample.int(10000, 2000, replace = TRUE)
+# three different request patterns in increasing order of difficulty:
+# contiguous range, sorted non-contiguous unique, and unsorted non-contiguous
+# with duplicates.
 
-# fastqindexr index creation
-system.time(
-  idx <- create_index(tmp, type = "fasta")
+requests <- list(
+  contiguous = (n_records %/% 2) + seq_len(n_extract),
+  sorted_unique = sort(sample.int(n_records, n_extract, replace = FALSE)),
+  unsorted_dup = sample.int(n_records, n_extract, replace = TRUE)
 )
-#>    user  system elapsed 
-#>   0.008   0.000   0.008
 
-# Biostrings index creation
-system.time(
-  bi_index <- Biostrings::fasta.index(tmp, seqtype = "DNA")
+benchmarks <- data.frame(
+  compression = character(0),
+  implementation = character(0),
+  operation = character(0),
+  elapsed = numeric(0)
 )
-#>    user  system elapsed 
-#>   1.475   0.076   1.556
 
-# fastqindexr indexed extraction
-system.time({
-  res_fastqindexr <- extract_sequences(idx, ids)
-})
-#>    user  system elapsed 
-#>    0.01    0.00    0.01
+# loop over compression modes (gzip / plain)
+for (comp in c("gzip", "plain")) {
+  if (comp == "gzip") {
+    fileext <- ".fa.gz"
+  } else {
+    fileext <- ".fa"
+  }
+  tmp <- tempfile(fileext = fileext)
+  make_benchmark_fasta(tmp, n = n_records, width = 120)
+  # loop over implementations (fastqindexr / Biostrings)
+  for (impl in c("fastqindexr", "Biostrings")) {
+    index_time <- system.time(
+      if (impl == "fastqindexr") {
+        idx <- create_index(tmp, type = "fasta")
+      } else {
+        idx <- Biostrings::fasta.index(tmp, seqtype = "DNA")
+      }
+    )
 
-# Biostrings indexed extraction
-system.time({
-  selected <- bi_index[ids, , drop = FALSE]
-  res_biostrings <- Biostrings::readDNAStringSet(selected)
-})
-#>    user  system elapsed 
-#>   3.684   0.048   3.739
+    benchmarks <- rbind(
+      benchmarks,
+      data.frame(
+        compression = comp,
+        implementation = impl,
+        operation = "index",
+        elapsed = index_time[["elapsed"]]
+      )
+    )
 
-# verify that sequences and named are identical
-all.equal(
-  res_fastqindexr$seq,
-  as.character(res_biostrings),
-  check.attributes = FALSE
-)
-#> [1] TRUE
+    # loop over request patterns
+    for (r in names(requests)) {
+      ids <- requests[[r]]
+      extract_time <- system.time(
+        if (impl == "fastqindexr") {
+          res <- extract_sequences(idx, ids)
+        } else {
+          res <- Biostrings::readDNAStringSet(idx[ids, ])
+        }
+      )
+      benchmarks <- rbind(
+        benchmarks,
+        data.frame(
+          compression = comp,
+          implementation = impl,
+          operation = r,
+          elapsed = extract_time[["elapsed"]]
+        )
+      )
+    }
+  }
+  unlink(tmp)
+}
 
-all.equal(
-  res_fastqindexr$seq_id,
-  names(res_biostrings)
-)
-#> [1] TRUE
-
-unlink(tmp)
+benchmarks
+#>    compression implementation     operation elapsed
+#> 1         gzip    fastqindexr         index   0.009
+#> 2         gzip    fastqindexr    contiguous   0.006
+#> 3         gzip    fastqindexr sorted_unique   0.009
+#> 4         gzip    fastqindexr  unsorted_dup   0.009
+#> 5         gzip     Biostrings         index   0.009
+#> 6         gzip     Biostrings    contiguous   0.006
+#> 7         gzip     Biostrings sorted_unique   3.849
+#> 8         gzip     Biostrings  unsorted_dup   3.545
+#> 9        plain    fastqindexr         index   0.020
+#> 10       plain    fastqindexr    contiguous   0.017
+#> 11       plain    fastqindexr sorted_unique   0.017
+#> 12       plain    fastqindexr  unsorted_dup   0.016
+#> 13       plain     Biostrings         index   0.004
+#> 14       plain     Biostrings    contiguous   0.003
+#> 15       plain     Biostrings sorted_unique   0.008
+#> 16       plain     Biostrings  unsorted_dup   0.008
 ```
+
+Although `fastqindexr` supports extracting from both gzipped and plain
+FASTA/FASTQ files, it is only substantially faster than `Biostrings` in
+the cases where `Biostrings` struggles the most: when extracting
+*non-contiguous* sets from *gzipped* files. Note the logarithmic scale!
+
+``` r
+library(ggplot2)
+benchmarks$operation <- factor(benchmarks$operation,
+ levels = c("unsorted_dup", "sorted_unique", "contiguous", "index"))
+ggplot(benchmarks, aes(y = operation, x = elapsed * 1000, fill = implementation)) +
+geom_bar(stat = "identity", position = "dodge") +
+facet_wrap(~ compression, ncol = 1) +
+scale_x_log10(name = "Elapsed (ms)") +
+scale_y_discrete(name = "Operation") +
+theme_minimal() +
+theme(legend.position = "bottom")
+```
+
+<img src="man/figures/README-benchmark-plot-1.png" alt="" width="100%" />
 
 ## API at a glance
 
 - `create_index(files, type = c("auto", "fasta", "fastq"))`
-  - accepts one or many existing gzipped files
-  - returns a `fastqindexr_index` object
+  - accepts one or many existing FASTA/FASTQ files (all gzip or all
+    plain)
+  - returns a `fastqindexr_index` object, with subclass
+    `fastqindexr_gzip_index` or `fastqindexr_plain_index`
   - this object can be saved to disk with `saveRDS()` and loaded in a
     different session with `readRDS()` (or serialized/deserialized in
     other ways, such as with the
