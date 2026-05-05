@@ -2,26 +2,31 @@
 % Please edit documentation in R/extract_sequences.R
 \name{extract_sequences}
 \alias{extract_sequences}
-\title{Extract sequence records by ID from indexed gzipped FASTA or FASTQ}
+\title{Extract sequence records by ID from indexed FASTA or FASTQ}
 \usage{
 extract_sequences(
-  index,
+  index = NULL,
   seq_idx,
   file = NULL,
-  return = c("data.frame", "list", "seq")
+  return = c("data.frame", "list", "seq"),
+  mode = c("auto", "indexed", "sequential"),
+  type = c("auto", "fasta", "fastq"),
+  renumber = c("none", "zero_based", "one_based")
 )
 }
 \arguments{
 \item{index}{Either a \code{fastqindexr_index} object (from \code{\link[=create_index]{create_index()}} or
 \code{\link[=read_fqi_index]{read_fqi_index()}}) or one or more \code{.fqi} file paths.}
 
-\item{seq_idx}{Numeric vector of record IDs (positive whole numbers). Values
+\item{seq_idx}{Numeric vector of record IDs (positive whole numbers), or a
+\strong{list} of such vectors (one result per list element, same order). Values
 are coerced via \code{\link[=as.numeric]{as.numeric()}}; \code{NA} and values outside \code{1} … \code{n_records}
 are errors.}
 
-\item{file}{Optional character vector of file paths overriding those
-stored in \code{index$files} for object input.
-For \code{.fqi} path input, this provides indexed gz file path(s) passed to
+\item{file}{When \code{index} is non-\code{NULL}, optional path override(s) for
+\code{index$files}. When \code{index} is \code{NULL}, \strong{required} source file path(s) for
+streaming extraction (\code{mode} \code{"auto"} or \code{"sequential"}).
+For \code{.fqi} path input, this provides indexed file path(s) passed to
 \code{\link[=read_fqi_index]{read_fqi_index()}}. If omitted for \code{.fqi} input, file paths are deduced from
 the \code{.fqi} names.}
 
@@ -31,6 +36,19 @@ a list with \code{seq_id} and \code{seq} (and \code{qual} for FASTQ). With \code
 a character vector of sequences with \code{seq_id} as names, preserving order
 and allowing duplicate names. For indexed FASTQ, \code{return = "seq"} skips
 reading quality lines from the source.}
+
+\item{mode}{\code{"auto"} uses index-backed extraction when \code{index} is non-\code{NULL}
+and \code{getOption("fastqindexr.extract_mode", "indexed")} is \code{"indexed"};
+otherwise (no index, or option \code{"sequential"}) reads by streaming scans.
+\code{"indexed"} requires \code{index} and offset-based I/O. \code{"sequential"} always
+streams and does not require a live native index pointer (works with
+\code{index} fields after \code{\link[=readRDS]{readRDS()}} if paths remain valid).}
+
+\item{type}{When \code{index} is \code{NULL}, passed to format detection: \code{"auto"},
+\code{"fasta"}, or \code{"fastq"}.}
+
+\item{renumber}{Renames emitted \code{seq_id} / FASTA headers: \code{"none"},
+\code{"zero_based"}, or \code{"one_based"} (output order positions).}
 }
 \value{
 When \code{return = "data.frame"} (the default), a \code{data.frame}:
@@ -47,6 +65,10 @@ When \code{return = "list"}, a \code{list} with \code{seq_id}, \code{seq}, and f
 When \code{return = "seq"}, a character vector of \code{seq} only, with names
 set from \code{seq_id} (duplicates allowed).
 Empty extract requests use empty containers of the corresponding type.
+
+If \code{seq_idx} is a list, the return value is a list of results (same length
+and order as \code{seq_idx}), each obeying \code{return} and \code{renumber} for that
+partition.
 }
 \description{
 Returns rows in \strong{the same order as \code{seq_idx}}, including duplicate IDs. IDs

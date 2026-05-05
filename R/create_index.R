@@ -15,16 +15,16 @@ validate_input_files <- function(files) {
   normalizePath(files, mustWork = TRUE)
 }
 
-#' Build an in-memory index for gzipped FASTA or FASTQ
+#' Build an in-memory index for FASTA or FASTQ
 #'
-#' Scans one or more gzipped files and builds a random-access style index. When
-#' multiple files are given, they are treated as one logical concatenated
-#' stream: record IDs follow file order (first file first, then the next, and
-#' so on).
+#' Scans one or more files and builds a random-access style index. Gzip inputs
+#' use block-style indexing; uncompressed inputs use byte offsets for record
+#' starts. When multiple files are given, they are treated as one logical
+#' concatenated stream: record IDs follow file order (first file first, then
+#' the next, and so on).
 #'
-#' @param files Character vector of paths to existing
-#'   **gzip-compressed** (`.gz`)
-#'   FASTA or FASTQ files. Paths are normalized to absolute paths.
+#' @param files Character vector of paths to existing FASTA or FASTQ files
+#'   (gzip-compressed or plain). Paths are normalized to absolute paths.
 #' @param type Format of the records: `"auto"` (infer from the first non-empty
 #'   line of the first file: `>` for FASTA, `@` for FASTQ), `"fasta"`, or
 #'   `"fastq"`.
@@ -45,6 +45,7 @@ validate_input_files <- function(files) {
 #'   \item{index_payload}{Serialized internal index payload used to restore
 #'     native state after serialization/deserialization.}
 #'   \item{record_size}{Lines per record (2 for FASTA, 4 for FASTQ).}
+#'   \item{file_compression}{Per-file `"gzip"` or `"plain"`.}
 #' }
 #'
 #' @section FASTA limitation:

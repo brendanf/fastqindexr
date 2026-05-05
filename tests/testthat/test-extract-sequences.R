@@ -63,6 +63,67 @@ test_that("serialized index object works after readRDS", {
   expect_equal(out$seq_id, c("seq3", "seq1"))
 })
 
+test_that("mode sequential matches indexed extraction for same ids", {
+  path <- tempfile(fileext = ".fa.gz")
+  make_fasta_gz(path)
+  idx <- create_index(path, type = "fasta")
+  ids <- c(3L, 1L, 2L)
+  old <- options(fastqindexr.extract_mode = "indexed")
+  on.exit(options(old), add = TRUE)
+  ref <- extract_sequences(idx, ids, mode = "auto")
+  stream <- extract_sequences(idx, ids, mode = "sequential")
+  expect_equal(stream, ref)
+})
+
+test_that("mode sequential works after readRDS without live index ptr", {
+  path <- tempfile(fileext = ".fa.gz")
+  make_fasta_gz(path)
+  idx <- create_index(path, type = "fasta")
+  rds <- tempfile(fileext = ".rds")
+  saveRDS(idx, rds)
+  restored <- readRDS(rds)
+  restored$._cache$index_ptr <- NULL
+  out <- extract_sequences(restored, c(2L, 4L), mode = "sequential")
+  expect_equal(out$seq_id, c("seq2", "seq4"))
+})
+
+test_that("mode sequential does not open files with no requested global ids", {
+  p1 <- tempfile(fileext = ".fa.gz")
+  p2 <- tempfile(fileext = ".fa.gz")
+  on.exit(unlink(c(p1, p2)), add = TRUE)
+  make_fasta_gz(p1)
+  write_gz_lines(p2, c(">seq5", "ACAC", ">seq6", "TGTG"))
+  idx <- create_index(c(p1, p2), type = "fasta")
+  unlink(p2)
+  out <- extract_sequences(idx, c(1L, 3L), mode = "sequential")
+  expect_equal(out$seq_id, c("seq1", "seq3"))
+})
+
+test_that("list seq_idx returns a list of results", {
+  path <- tempfile(fileext = ".fa.gz")
+  make_fasta_gz(path)
+  idx <- create_index(path, type = "fasta")
+  parts <- list(c(1L, 2L), integer(), c(4L))
+  out <- extract_sequences(idx, parts, return = "data.frame")
+  expect_type(out, "list")
+  expect_length(out, 3L)
+  expect_equal(out[[1L]]$seq_id, c("seq1", "seq2"))
+  expect_equal(nrow(out[[2L]]), 0L)
+  expect_equal(out[[3L]]$seq_id, "seq4")
+})
+
+test_that("options(fastqindexr.extract_mode = 'sequential_only') warns", {
+  path <- tempfile(fileext = ".fa.gz")
+  make_fasta_gz(path)
+  idx <- create_index(path, type = "fasta")
+  old <- options(fastqindexr.extract_mode = "sequential_only")
+  on.exit(options(old), add = TRUE)
+  expect_warning(
+    extract_sequences(idx, 1L),
+    "deprecated"
+  )
+})
+
 test_that("extract_sequences return = list for FASTA and FASTQ", {
   fa_path <- tempfile(fileext = ".fa.gz")
   make_fasta_gz(fa_path)
@@ -222,7 +283,7 @@ test_that("region merge tuning options validate cleanly", {
   )
 })
 
-test_that("sequential_only mode preserves extraction outputs", {
+test_that("sequential option mode preserves extraction outputs", {
   tmp <- tempfile(fileext = ".fa.gz")
   on.exit(unlink(tmp), add = TRUE)
   make_benchmark_fasta(tmp, n = 500L, width = 20L)
@@ -239,7 +300,7 @@ test_that("sequential_only mode preserves extraction outputs", {
   on.exit(options(old_opts), add = TRUE)
 
   baseline <- extract_sequences(idx, ids, return = "list")
-  options(fastqindexr.extract_mode = "sequential_only")
+  options(fastqindexr.extract_mode = "sequential")
   got <- extract_sequences(idx, ids, return = "list")
   expect_equal(got, baseline)
 })
@@ -261,6 +322,9 @@ test_that("diagnostics attributes are exposed when enabled", {
 
   res <- extract_sequences(idx, c(1L, 50L, 150L), return = "list")
   diag <- attr(res, "fastqindexr_diagnostics", exact = TRUE)
+  if (is.null(diag)) {
+    skip("Diagnostics require building with -DFASTQINDEXR_TIMING in PKG_CXXFLAGS.")
+  }
   expect_true(is.list(diag))
   expect_setequal(
     names(diag),

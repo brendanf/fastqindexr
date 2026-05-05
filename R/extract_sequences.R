@@ -23,6 +23,9 @@ validate_index <- function(index) {
 
 #' @noRd
 resolve_extract_index <- function(index, file) {
+  if (is.null(index)) {
+    return(list(index = NULL, file = file))
+  }
   if (inherits(index, "fastqindexr_index")) {
     return(list(index = index, file = file))
   }
@@ -31,7 +34,7 @@ resolve_extract_index <- function(index, file) {
     return(list(index = loaded, file = NULL))
   }
   stop(
-    "`index` must be a fastqindexr_index object or path(s) to `.fqi` file(s).",
+    "`index` must be NULL, a fastqindexr_index object, or path(s) to `.fqi` file(s).",
     call. = FALSE
   )
 }
@@ -86,6 +89,47 @@ create_empty_extract_file <- function(path, compress) {
 }
 
 #' @noRd
+write_sequences_df_to_file <- function(
+  df,
+  outfile,
+  out_type,
+  compress,
+  append
+) {
+  mode <- if (append) "ab" else "wb"
+  con <- if (compress) {
+    gzfile(outfile, open = mode)
+  } else {
+    file(outfile, open = mode)
+  }
+  on.exit(close(con), add = TRUE)
+  if (identical(out_type, "fastq")) {
+    for (i in seq_len(nrow(df))) {
+      cat(
+        paste0(
+          "@",
+          df$seq_id[[i]],
+          "\n",
+          df$seq[[i]],
+          "\n+\n",
+          df$qual[[i]],
+          "\n"
+        ),
+        file = con
+      )
+    }
+  } else {
+    for (i in seq_len(nrow(df))) {
+      cat(
+        paste0(">", df$seq_id[[i]], "\n", df$seq[[i]], "\n"),
+        file = con
+      )
+    }
+  }
+  invisible(outfile)
+}
+
+#' @noRd
 resolve_region_merge_tuning <- function() {
   bridge_gap <- getOption("fastqindexr.max_bridge_gap", 512)
   region_records <- getOption("fastqindexr.max_region_records", 100000)
@@ -128,15 +172,22 @@ resolve_region_merge_tuning <- function() {
     !is.character(extract_mode) ||
       length(extract_mode) != 1L ||
       is.na(extract_mode) ||
-      !(extract_mode %in% c("indexed", "sequential_only"))
+      !(extract_mode %in% c("indexed", "sequential_only", "sequential"))
   ) {
     stop(
       paste0(
         "Option `fastqindexr.extract_mode` must be one of ",
-        "`\"indexed\"` or `\"sequential_only\"`."
+        "`\"indexed\"`, `\"sequential\"`, or `\"sequential_only\"` (deprecated)."
       ),
       call. = FALSE
     )
+  }
+  if (identical(extract_mode, "sequential_only")) {
+    warning(
+      "`options(fastqindexr.extract_mode = \"sequential_only\")` is deprecated; use `\"sequential\"`.",
+      call. = FALSE
+    )
+    extract_mode <- "sequential"
   }
   if (
     !is.logical(diagnostics) || length(diagnostics) != 1L || is.na(diagnostics)
@@ -153,6 +204,51 @@ resolve_region_merge_tuning <- function() {
     extract_mode = extract_mode,
     diagnostics = diagnostics
   )
+}
+
+#' @noRd
+resolve_source_type_no_index <- function(files, type) {
+  type <- match.arg(type, c("auto", "fasta", "fastq"))
+  if (identical(type, "auto")) {
+    cpp_detect_input_format(files[[1L]])
+  } else {
+    type
+  }
+}
+
+#' @noRd
+streaming_record_offsets <- function(index, files, source_type) {
+  if (!is.null(index)) {
+    return(as.numeric(index$file_record_offsets))
+  }
+  cpp_scan_record_offsets(files = files, type = source_type)
+}
+
+#' @noRd
+extraction_uses_streaming <- function(mode, has_index, option_extract_mode) {
+  if (identical(mode, "sequential")) {
+    return(TRUE)
+  }
+  if (identical(mode, "indexed")) {
+    return(FALSE)
+  }
+  if (!has_index) {
+    return(TRUE)
+  }
+  identical(option_extract_mode, "sequential")
+}
+
+#' @noRd
+apply_extract_renumber <- function(seq_ids, renumber) {
+  renumber <- match.arg(renumber, c("none", "zero_based", "one_based"))
+  if (identical(renumber, "none")) {
+    return(seq_ids)
+  }
+  n <- seq_along(seq_ids)
+  if (identical(renumber, "zero_based")) {
+    return(as.character(n - 1L))
+  }
+  as.character(n)
 }
 
 #' Partition sequence IDs into stable batches
@@ -229,7 +325,7 @@ partition_seq_idx <- function(
   }
 }
 
-#' Extract sequence records by ID from indexed gzipped FASTA or FASTQ
+#' Extract sequence records by ID from indexed FASTA or FASTQ
 #'
 #' Returns rows in **the same order as `seq_idx`**, including duplicate IDs. IDs
 #' are
@@ -238,12 +334,14 @@ partition_seq_idx <- function(
 #'
 #' @param index Either a `fastqindexr_index` object (from [create_index()] or
 #'   [read_fqi_index()]) or one or more `.fqi` file paths.
-#' @param seq_idx Numeric vector of record IDs (positive whole numbers). Values
+#' @param seq_idx Numeric vector of record IDs (positive whole numbers), or a
+#'   **list** of such vectors (one result per list element, same order). Values
 #'   are coerced via [as.numeric()]; `NA` and values outside `1` &hellip; `n_records`
 #'   are errors.
-#' @param file Optional character vector of file paths overriding those
-#'   stored in `index$files` for object input.
-#'   For `.fqi` path input, this provides indexed gz file path(s) passed to
+#' @param file When `index` is non-`NULL`, optional path override(s) for
+#'   `index$files`. When `index` is `NULL`, **required** source file path(s) for
+#'   streaming extraction (`mode` `"auto"` or `"sequential"`).
+#'   For `.fqi` path input, this provides indexed file path(s) passed to
 #'   [read_fqi_index()]. If omitted for `.fqi` input, file paths are deduced from
 #'   the `.fqi` names.
 #' @param return In-memory return shape: `"data.frame"` (the default), `"list"`, or
@@ -252,6 +350,16 @@ partition_seq_idx <- function(
 #'   a character vector of sequences with `seq_id` as names, preserving order
 #'   and allowing duplicate names. For indexed FASTQ, `return = "seq"` skips
 #'   reading quality lines from the source.
+#' @param mode `"auto"` uses index-backed extraction when `index` is non-`NULL`
+#'   and `getOption("fastqindexr.extract_mode", "indexed")` is `"indexed"`;
+#'   otherwise (no index, or option `"sequential"`) reads by streaming scans.
+#'   `"indexed"` requires `index` and offset-based I/O. `"sequential"` always
+#'   streams and does not require a live native index pointer (works with
+#'   `index` fields after [readRDS()] if paths remain valid).
+#' @param type When `index` is `NULL`, passed to format detection: `"auto"`,
+#'   `"fasta"`, or `"fastq"`.
+#' @param renumber Renames emitted `seq_id` / FASTA headers: `"none"`,
+#'   `"zero_based"`, or `"one_based"` (output order positions).
 #'
 #' @return
 #' When `return = "data.frame"` (the default), a `data.frame`:
@@ -269,6 +377,10 @@ partition_seq_idx <- function(
 #' set from `seq_id` (duplicates allowed).
 #' Empty extract requests use empty containers of the corresponding type.
 #'
+#' If `seq_idx` is a list, the return value is a list of results (same length
+#' and order as `seq_idx`), each obeying `return` and `renumber` for that
+#' partition.
+#'
 #' @section FASTA limitation:
 #' Each record must consist of a header line plus **one** sequence line.
 #'
@@ -285,38 +397,31 @@ partition_seq_idx <- function(
 #'
 #' @export
 extract_sequences <- function(
-  index,
+  index = NULL,
   seq_idx,
   file = NULL,
-  return = c("data.frame", "list", "seq")
+  return = c("data.frame", "list", "seq"),
+  mode = c("auto", "indexed", "sequential"),
+  type = c("auto", "fasta", "fastq"),
+  renumber = c("none", "zero_based", "one_based")
 ) {
   return <- match.arg(return)
+  mode <- match.arg(mode)
+  renumber <- match.arg(renumber)
   tuning <- resolve_region_merge_tuning()
   resolved <- resolve_extract_index(index, file)
   index <- resolved$index
   file <- resolved$file
-  index <- validate_index(index)
-  live_index <- ensure_live_index_ptr(index)
-  index <- live_index$index
-  index_ptr <- live_index$ptr
+  has_index <- !is.null(index)
+  if (identical(mode, "indexed") && !has_index) {
+    stop("`mode = \"indexed\"` requires a non-NULL `index`.", call. = FALSE)
+  }
+  if (has_index) {
+    index <- validate_index(index)
+  }
 
-  if (length(seq_idx) < 1L) {
-    if (return == "list") {
-      if (identical(index$format, "fastq")) {
-        return(
-          list(
-            seq_id = character(),
-            seq = character(),
-            qual = character()
-          )
-        )
-      }
-      return(list(seq_id = character(), seq = character()))
-    }
-    if (return == "seq") {
-      return(structure(character(0L), names = character(0L)))
-    }
-    if (identical(index$format, "fastq")) {
+  empty_out_df <- function(fmt) {
+    if (identical(fmt, "fastq")) {
       return(data.frame(
         seq_id = character(),
         seq = character(),
@@ -324,48 +429,130 @@ extract_sequences <- function(
         stringsAsFactors = FALSE
       ))
     }
-    return(data.frame(
+    data.frame(
       seq_id = character(),
       seq = character(),
       stringsAsFactors = FALSE
-    ))
+    )
+  }
+  empty_out_list <- function(fmt) {
+    if (identical(fmt, "fastq")) {
+      return(list(
+        seq_id = character(),
+        seq = character(),
+        qual = character()
+      ))
+    }
+    list(seq_id = character(), seq = character())
   }
 
-  n_records <- as.numeric(index$n_records)
-  seq_idx <- validate_seq_idx(seq_idx = seq_idx, n_records = n_records)
-
-  files <- if (is.null(file)) {
-    as.character(index$files)
-  } else {
-    files <- validate_input_files(file)
-    if (length(files) != length(index$files)) {
-      stop(
-        paste0(
-          "Override `file` must contain the same number of files as ",
-          "index$files."
-        ),
-        call. = FALSE
+  if (is.list(seq_idx)) {
+    out <- vector("list", length(seq_idx))
+    for (i in seq_along(seq_idx)) {
+      out[[i]] <- extract_sequences(
+        index = index,
+        seq_idx = seq_idx[[i]],
+        file = file,
+        return = return,
+        mode = mode,
+        type = type,
+        renumber = renumber
       )
     }
-    files
+    return(out)
   }
 
-  is_fastq <- identical(index$format, "fastq")
+  source_type <- if (has_index) {
+    index$format
+  } else {
+    files_pre <- validate_input_files(file)
+    resolve_source_type_no_index(files_pre, type)
+  }
+
+  use_streaming <- extraction_uses_streaming(
+    mode,
+    has_index,
+    tuning$extract_mode
+  )
+
+  if (length(seq_idx) < 1L) {
+    if (return == "list") {
+      return(empty_out_list(source_type))
+    }
+    if (return == "seq") {
+      return(structure(character(0L), names = character(0L)))
+    }
+    return(empty_out_df(source_type))
+  }
+
+  files <- if (has_index) {
+    if (is.null(file)) {
+      as.character(index$files)
+    } else {
+      files <- validate_input_files(file)
+      if (length(files) != length(index$files)) {
+        stop(
+          paste0(
+            "Override `file` must contain the same number of files as ",
+            "index$files."
+          ),
+          call. = FALSE
+        )
+      }
+      files
+    }
+  } else {
+    validate_input_files(file)
+  }
+
+  n_records <- if (has_index) {
+    as.numeric(index$n_records)
+  } else {
+    roff <- streaming_record_offsets(NULL, files, source_type)
+    as.numeric(roff[[length(roff)]])
+  }
+  seq_idx <- validate_seq_idx(seq_idx = seq_idx, n_records = n_records)
+
+  is_fastq <- identical(source_type, "fastq")
   include_qual <- is_fastq && (return %in% c("data.frame", "list"))
 
-  # nolint nextline: object_usage_linter
-  result <- cpp_extract_sequences(
-    files = files,
-    type = index$format,
-    ids_zero_based = as.numeric(seq_idx - 1),
-    index_ptr_sexp = index_ptr,
-    include_qual = include_qual,
-    max_bridge_gap = tuning$max_bridge_gap,
-    max_region_records = tuning$max_region_records,
-    extract_mode = tuning$extract_mode,
-    diagnostics = tuning$diagnostics
-  )
+  if (use_streaming) {
+    offsets <- streaming_record_offsets(index, files, source_type)
+    # nolint nextline: object_usage_linter
+    result <- cpp_extract_sequences_streaming(
+      files = files,
+      type = source_type,
+      ids_zero_based = as.numeric(seq_idx - 1),
+      record_offsets_r = offsets,
+      include_qual = include_qual,
+      diagnostics = tuning$diagnostics
+    )
+  } else {
+    live_index <- ensure_live_index_ptr(index)
+    index <- live_index$index
+    index_ptr <- live_index$ptr
+    # nolint nextline: object_usage_linter
+    result <- cpp_extract_sequences(
+      files = files,
+      type = index$format,
+      ids_zero_based = as.numeric(seq_idx - 1),
+      index_ptr_sexp = index_ptr,
+      include_qual = include_qual,
+      max_bridge_gap = tuning$max_bridge_gap,
+      max_region_records = tuning$max_region_records,
+      extract_mode = tuning$extract_mode,
+      diagnostics = tuning$diagnostics
+    )
+  }
   diag <- attr(result, "fastqindexr_diagnostics", exact = TRUE)
+
+  if (!identical(renumber, "none")) {
+    new_ids <- apply_extract_renumber(
+      as.character(result$seq_id),
+      renumber
+    )
+    result$seq_id <- new_ids
+  }
 
   if (return == "data.frame") {
     if (is_fastq) {
@@ -456,22 +643,30 @@ extract_sequences <- function(
 #'
 #' @export
 extract_sequences_to_file <- function(
-  index,
+  index = NULL,
   seq_idx,
   file = NULL,
   outfile,
   type = c("auto", "fasta", "fastq"),
   append = FALSE,
-  compress = endsWith(tolower(outfile), ".gz")
+  compress = endsWith(tolower(outfile), ".gz"),
+  mode = c("auto", "indexed", "sequential"),
+  input_type = c("auto", "fasta", "fastq"),
+  renumber = c("none", "zero_based", "one_based")
 ) {
+  mode <- match.arg(mode)
+  renumber <- match.arg(renumber)
   tuning <- resolve_region_merge_tuning()
   resolved <- resolve_extract_index(index, file)
   index <- resolved$index
   file <- resolved$file
-  index <- validate_index(index)
-  live_index <- ensure_live_index_ptr(index)
-  index <- live_index$index
-  index_ptr <- live_index$ptr
+  has_index <- !is.null(index)
+  if (identical(mode, "indexed") && !has_index) {
+    stop("`mode = \"indexed\"` requires a non-NULL `index`.", call. = FALSE)
+  }
+  if (has_index) {
+    index <- validate_index(index)
+  }
 
   if (!is.logical(append) || length(append) != 1L || is.na(append)) {
     stop("`append` must be TRUE or FALSE.", call. = FALSE)
@@ -481,25 +676,133 @@ extract_sequences_to_file <- function(
   }
   is_partition_mode <- is.list(seq_idx) || length(outfile) > 1L
 
-  n_records <- as.numeric(index$n_records)
-
-  files <- if (is.null(file)) {
-    as.character(index$files)
+  source_type <- if (has_index) {
+    index$format
   } else {
-    files <- validate_input_files(file)
-    if (length(files) != length(index$files)) {
-      stop(
-        paste0(
-          "Override `file` must contain the same number of files as ",
-          "index$files."
-        ),
-        call. = FALSE
-      )
+    files_pre <- validate_input_files(file)
+    resolve_source_type_no_index(files_pre, input_type)
+  }
+
+  use_streaming <- extraction_uses_streaming(
+    mode,
+    has_index,
+    tuning$extract_mode
+  )
+
+  files <- if (has_index) {
+    if (is.null(file)) {
+      as.character(index$files)
+    } else {
+      files <- validate_input_files(file)
+      if (length(files) != length(index$files)) {
+        stop(
+          paste0(
+            "Override `file` must contain the same number of files as ",
+            "index$files."
+          ),
+          call. = FALSE
+        )
+      }
+      files
     }
-    files
+  } else {
+    validate_input_files(file)
+  }
+
+  n_records <- if (has_index) {
+    as.numeric(index$n_records)
+  } else {
+    roff <- streaming_record_offsets(NULL, files, source_type)
+    as.numeric(roff[[length(roff)]])
   }
 
   type <- match.arg(type)
+
+  if (!identical(renumber, "none")) {
+    if (is_partition_mode) {
+      if (!is.list(seq_idx)) {
+        stop("Partitioned mode requires `seq_idx` to be a list.", call. = FALSE)
+      }
+      if (length(seq_idx) != length(outfile)) {
+        stop("`outfile` must match `seq_idx` list length.", call. = FALSE)
+      }
+      compress_vec <- if (length(compress) == 1L) {
+        rep(compress, length(outfile))
+      } else {
+        compress
+      }
+      out_norm <- normalizePath(outfile, winslash = "/", mustWork = FALSE)
+      for (i in seq_along(seq_idx)) {
+        ids_i <- seq_idx[[i]]
+        if (length(ids_i) < 1L) {
+          if (!append) {
+            create_empty_extract_file(outfile[i], compress = compress_vec[i])
+          }
+          next
+        }
+        validate_seq_idx(ids_i, n_records, "`seq_idx` partition")
+        df <- extract_sequences(
+          index = index,
+          seq_idx = ids_i,
+          file = file,
+          return = "data.frame",
+          mode = mode,
+          type = input_type,
+          renumber = renumber
+        )
+        resolved_type <- if (type == "auto") source_type else type
+        if (source_type == "fasta" && resolved_type == "fastq") {
+          stop("Cannot emit FASTQ output from FASTA input.", call. = FALSE)
+        }
+        write_sequences_df_to_file(
+          df,
+          outfile[i],
+          resolved_type,
+          compress_vec[i],
+          append
+        )
+      }
+      return(invisible(out_norm))
+    }
+    if (length(seq_idx) < 1L) {
+      return(invisible(normalizePath(
+        outfile,
+        winslash = "/",
+        mustWork = FALSE
+      )))
+    }
+    validate_seq_idx(seq_idx, n_records)
+    df <- extract_sequences(
+      index = index,
+      seq_idx = seq_idx,
+      file = file,
+      return = "data.frame",
+      mode = mode,
+      type = input_type,
+      renumber = renumber
+    )
+    resolved_type <- if (type == "auto") source_type else type
+    if (source_type == "fasta" && resolved_type == "fastq") {
+      stop("Cannot emit FASTQ output from FASTA input.", call. = FALSE)
+    }
+    write_sequences_df_to_file(df, outfile, resolved_type, compress, append)
+    return(invisible(normalizePath(outfile, winslash = "/", mustWork = FALSE)))
+  }
+
+  live_index <- if (!use_streaming && has_index) {
+    ensure_live_index_ptr(index)
+  } else {
+    NULL
+  }
+  index_ptr <- if (!is.null(live_index)) {
+    live_index$ptr
+  } else {
+    NULL
+  }
+  if (!is.null(live_index)) {
+    index <- live_index$index
+  }
+
   if (is_partition_mode) {
     if (!is.list(seq_idx)) {
       stop("Partitioned mode requires `seq_idx` to be a list.", call. = FALSE)
@@ -560,25 +863,38 @@ extract_sequences_to_file <- function(
       no_cross_partition_duplicates
 
     if (can_merge_partitions) {
-      resolved_type <- if (type == "auto") index$format else type
-      if (index$format == "fasta" && resolved_type == "fastq") {
+      resolved_type <- if (type == "auto") source_type else type
+      if (source_type == "fasta" && resolved_type == "fastq") {
         stop("Cannot emit FASTQ output from FASTA index input.", call. = FALSE)
       }
-      include_qual <- identical(index$format, "fastq") &&
+      include_qual <- identical(source_type, "fastq") &&
         identical(resolved_type, "fastq")
       union_ids <- sort(all_ids)
-      # nolint nextline: object_usage_linter
-      merged <- cpp_extract_sequences(
-        files = files,
-        type = index$format,
-        ids_zero_based = as.numeric(union_ids - 1),
-        index_ptr_sexp = index_ptr,
-        include_qual = include_qual,
-        max_bridge_gap = tuning$max_bridge_gap,
-        max_region_records = tuning$max_region_records,
-        extract_mode = tuning$extract_mode,
-        diagnostics = tuning$diagnostics
-      )
+      if (use_streaming) {
+        offsets <- streaming_record_offsets(index, files, source_type)
+        # nolint nextline: object_usage_linter
+        merged <- cpp_extract_sequences_streaming(
+          files = files,
+          type = source_type,
+          ids_zero_based = as.numeric(union_ids - 1),
+          record_offsets_r = offsets,
+          include_qual = include_qual,
+          diagnostics = tuning$diagnostics
+        )
+      } else {
+        # nolint nextline: object_usage_linter
+        merged <- cpp_extract_sequences(
+          files = files,
+          type = index$format,
+          ids_zero_based = as.numeric(union_ids - 1),
+          index_ptr_sexp = index_ptr,
+          include_qual = include_qual,
+          max_bridge_gap = tuning$max_bridge_gap,
+          max_region_records = tuning$max_region_records,
+          extract_mode = tuning$extract_mode,
+          diagnostics = tuning$diagnostics
+        )
+      }
       render_one <- function(seq_id, seq, qual) {
         if (resolved_type == "fastq") {
           paste0("@", seq_id, "\n", seq, "\n+\n", qual, "\n")
@@ -629,21 +945,37 @@ extract_sequences_to_file <- function(
       if (length(ids_i) < 1L) {
         next
       }
-      # nolint nextline: object_usage_linter
-      res <- cpp_extract_sequences_to_file(
-        files = files,
-        source_type = index$format,
-        ids_zero_based = as.numeric(ids_i - 1),
-        index_ptr_sexp = index_ptr,
-        output_type = type,
-        outfile = outfile[i],
-        append = append,
-        compress = compress_vec[i],
-        max_bridge_gap = tuning$max_bridge_gap,
-        max_region_records = tuning$max_region_records,
-        extract_mode = tuning$extract_mode,
-        diagnostics = tuning$diagnostics
-      )
+      if (use_streaming) {
+        offsets <- streaming_record_offsets(index, files, source_type)
+        # nolint nextline: object_usage_linter
+        res <- cpp_extract_sequences_to_file_streaming(
+          files = files,
+          source_type = source_type,
+          ids_zero_based = as.numeric(ids_i - 1),
+          record_offsets_r = offsets,
+          output_type = type,
+          outfile = outfile[i],
+          append = append,
+          compress = compress_vec[i],
+          diagnostics = tuning$diagnostics
+        )
+      } else {
+        # nolint nextline: object_usage_linter
+        res <- cpp_extract_sequences_to_file(
+          files = files,
+          source_type = index$format,
+          ids_zero_based = as.numeric(ids_i - 1),
+          index_ptr_sexp = index_ptr,
+          output_type = type,
+          outfile = outfile[i],
+          append = append,
+          compress = compress_vec[i],
+          max_bridge_gap = tuning$max_bridge_gap,
+          max_region_records = tuning$max_region_records,
+          extract_mode = tuning$extract_mode,
+          diagnostics = tuning$diagnostics
+        )
+      }
       if (isTRUE(tuning$diagnostics)) {
         attr(out_norm, "fastqindexr_diagnostics") <- attr(
           res,
@@ -662,21 +994,37 @@ extract_sequences_to_file <- function(
     return(invisible(normalizePath(outfile, winslash = "/", mustWork = FALSE)))
   }
   seq_idx <- validate_seq_idx(seq_idx = seq_idx, n_records = n_records)
-  # nolint nextline: object_usage_linter
-  res <- cpp_extract_sequences_to_file(
-    files = files,
-    source_type = index$format,
-    ids_zero_based = as.numeric(seq_idx - 1),
-    index_ptr_sexp = index_ptr,
-    output_type = type,
-    outfile = outfile,
-    append = append,
-    compress = compress,
-    max_bridge_gap = tuning$max_bridge_gap,
-    max_region_records = tuning$max_region_records,
-    extract_mode = tuning$extract_mode,
-    diagnostics = tuning$diagnostics
-  )
+  if (use_streaming) {
+    offsets <- streaming_record_offsets(index, files, source_type)
+    # nolint nextline: object_usage_linter
+    res <- cpp_extract_sequences_to_file_streaming(
+      files = files,
+      source_type = source_type,
+      ids_zero_based = as.numeric(seq_idx - 1),
+      record_offsets_r = offsets,
+      output_type = type,
+      outfile = outfile,
+      append = append,
+      compress = compress,
+      diagnostics = tuning$diagnostics
+    )
+  } else {
+    # nolint nextline: object_usage_linter
+    res <- cpp_extract_sequences_to_file(
+      files = files,
+      source_type = index$format,
+      ids_zero_based = as.numeric(seq_idx - 1),
+      index_ptr_sexp = index_ptr,
+      output_type = type,
+      outfile = outfile,
+      append = append,
+      compress = compress,
+      max_bridge_gap = tuning$max_bridge_gap,
+      max_region_records = tuning$max_region_records,
+      extract_mode = tuning$extract_mode,
+      diagnostics = tuning$diagnostics
+    )
+  }
   out_norm <- normalizePath(outfile, winslash = "/", mustWork = FALSE)
   if (isTRUE(tuning$diagnostics)) {
     attr(out_norm, "fastqindexr_diagnostics") <- attr(
@@ -712,16 +1060,19 @@ extract_sequences_to_file <- function(
 #'
 #' @export
 extract_sequences_dnastringset <- function(
-  index,
+  index = NULL,
   seq_idx,
   file = NULL,
   renumber = c("none", "zero_based", "one_based"),
-  chunk_chars = 1e7
+  chunk_chars = 1e7,
+  mode = c("auto", "indexed", "sequential"),
+  type = c("auto", "fasta", "fastq")
 ) {
   if (!requireNamespace("Biostrings", quietly = TRUE)) {
     stop("Package `Biostrings` is required.", call. = FALSE)
   }
   renumber <- match.arg(renumber)
+  mode <- match.arg(mode)
   tuning <- resolve_region_merge_tuning()
   if (
     !is.numeric(chunk_chars) ||
@@ -736,30 +1087,94 @@ extract_sequences_dnastringset <- function(
     )
   }
   resolved <- resolve_extract_index(index, file)
-  index <- validate_index(resolved$index)
-  live_index <- ensure_live_index_ptr(index)
-  index <- live_index$index
-  index_ptr <- live_index$ptr
-  n_records <- as.numeric(index$n_records)
+  index <- resolved$index
+  file <- resolved$file
+  has_index <- !is.null(index)
+  if (identical(mode, "indexed") && !has_index) {
+    stop("`mode = \"indexed\"` requires a non-NULL `index`.", call. = FALSE)
+  }
+  if (has_index) {
+    index <- validate_index(index)
+  }
+
+  files <- if (has_index) {
+    if (is.null(file)) {
+      as.character(index$files)
+    } else {
+      files <- validate_input_files(file)
+      if (length(files) != length(index$files)) {
+        stop(
+          paste0(
+            "Override `file` must contain the same number of files as ",
+            "index$files."
+          ),
+          call. = FALSE
+        )
+      }
+      files
+    }
+  } else {
+    validate_input_files(file)
+  }
+
+  source_type <- if (has_index) {
+    index$format
+  } else {
+    resolve_source_type_no_index(files, type)
+  }
+
+  use_streaming <- extraction_uses_streaming(
+    mode,
+    has_index,
+    tuning$extract_mode
+  )
+
+  if (is.list(seq_idx)) {
+    out <- vector("list", length(seq_idx))
+    for (i in seq_along(seq_idx)) {
+      out[[i]] <- extract_sequences_dnastringset(
+        index = index,
+        seq_idx = seq_idx[[i]],
+        file = file,
+        renumber = renumber,
+        chunk_chars = chunk_chars,
+        mode = mode,
+        type = type
+      )
+    }
+    return(out)
+  }
+
+  n_records <- if (has_index) {
+    as.numeric(index$n_records)
+  } else {
+    roff <- streaming_record_offsets(NULL, files, source_type)
+    as.numeric(roff[[length(roff)]])
+  }
   if (length(seq_idx) < 1L) {
     return(Biostrings::DNAStringSet(character()))
   }
   seq_idx <- validate_seq_idx(seq_idx = seq_idx, n_records = n_records)
-  files <- if (is.null(resolved$file)) {
-    as.character(index$files)
-  } else {
-    files <- validate_input_files(resolved$file)
-    if (length(files) != length(index$files)) {
-      stop(
-        paste0(
-          "Override `file` must contain the same number of files as ",
-          "index$files."
-        ),
-        call. = FALSE
+
+  if (use_streaming) {
+    offsets <- streaming_record_offsets(index, files, source_type)
+    # nolint nextline: object_usage_linter
+    return(
+      cpp_extract_sequences_dnastringset_streaming(
+        files = files,
+        source_type = source_type,
+        ids_zero_based = as.numeric(seq_idx - 1),
+        record_offsets_r = offsets,
+        chunk_chars = as.numeric(chunk_chars),
+        diagnostics = tuning$diagnostics,
+        renumber_mode = renumber
       )
-    }
-    files
+    )
   }
+
+  live_index <- ensure_live_index_ptr(index)
+  index <- live_index$index
+  index_ptr <- live_index$ptr
   # nolint nextline: object_usage_linter
   cpp_extract_sequences_dnastringset(
     files = files,

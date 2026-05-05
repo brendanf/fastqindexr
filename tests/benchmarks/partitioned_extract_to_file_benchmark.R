@@ -26,7 +26,7 @@ ids <- seq_len(200000L)
 cont <- partition_seq_idx(ids, n_parts = 8L, strategy = "contiguous")
 rr <- partition_seq_idx(ids, n_parts = 8L, strategy = "round_robin")
 
-bench_partition <- function(label, partitions) {
+bench_partition <- function(label, partitions, mode = "auto") {
   outs <- replicate(
     length(partitions),
     tempfile(fileext = ".fa"),
@@ -38,7 +38,8 @@ bench_partition <- function(label, partitions) {
       idx,
       partitions,
       outfile = outs,
-      append = FALSE
+      append = FALSE,
+      mode = mode
     )
   })[["elapsed"]]
   diag <- attr(ret, "fastqindexr_diagnostics", exact = TRUE)
@@ -62,7 +63,8 @@ bench_partition_with_tuning <- function(
   max_bridge_gap = 64,
   max_region_records = 2147483647,
   extract_mode = "indexed",
-  diagnostics = TRUE
+  diagnostics = TRUE,
+  mode = "auto"
 ) {
   old_opts <- options(
     fastqindexr.max_bridge_gap = max_bridge_gap,
@@ -71,7 +73,7 @@ bench_partition_with_tuning <- function(
     fastqindexr.extract_diagnostics = diagnostics
   )
   on.exit(options(old_opts), add = TRUE)
-  bench_partition(label, partitions)
+  bench_partition(label, partitions, mode = mode)
 }
 
 bench_partition_matrix <- function(label_prefix, partitions, tuning_grid) {
@@ -93,12 +95,14 @@ bench_partition_mode_compare <- function(label_prefix, partitions) {
   bench_partition_with_tuning(
     sprintf("%s mode=indexed", label_prefix),
     partitions,
-    extract_mode = "indexed"
+    extract_mode = "indexed",
+    mode = "auto"
   )
   bench_partition_with_tuning(
-    sprintf("%s mode=sequential_only", label_prefix),
+    sprintf("%s mode=sequential", label_prefix),
     partitions,
-    extract_mode = "sequential_only"
+    extract_mode = "indexed",
+    mode = "sequential"
   )
 }
 

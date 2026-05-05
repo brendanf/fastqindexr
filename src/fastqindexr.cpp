@@ -47,6 +47,8 @@ struct ParsedRecord {
 struct IndexedFile {
   fastqindex_core::FileIndex index;
   std::uint64_t record_count{0};
+  bool plain{false};
+  std::vector<std::uint64_t> plain_header_byte_offsets;
 };
 
 struct IndexBundle {
@@ -254,6 +256,11 @@ Rcpp::List serializeIndexedFile(const IndexedFile& indexed_file) {
     );
   }
 
+  Rcpp::NumericVector plain_off(static_cast<R_xlen_t>(indexed_file.plain_header_byte_offsets.size()));
+  for (R_xlen_t i = 0; i < plain_off.size(); ++i) {
+    plain_off[i] = static_cast<double>(indexed_file.plain_header_byte_offsets[static_cast<size_t>(i)]);
+  }
+
   return Rcpp::List::create(
     Rcpp::Named("block_index") = block_index,
     Rcpp::Named("block_offset_in_raw_file") = block_offset,
@@ -263,7 +270,9 @@ Rcpp::List serializeIndexedFile(const IndexedFile& indexed_file) {
     Rcpp::Named("bits") = bits,
     Rcpp::Named("dictionary_blob") = dictionary_blob,
     Rcpp::Named("total_lines") = static_cast<double>(indexed_file.index.total_lines),
-    Rcpp::Named("record_count") = static_cast<double>(indexed_file.record_count)
+    Rcpp::Named("record_count") = static_cast<double>(indexed_file.record_count),
+    Rcpp::Named("plain") = indexed_file.plain,
+    Rcpp::Named("plain_header_byte_offsets") = plain_off
   );
 }
 
@@ -278,8 +287,9 @@ Rcpp::List serializeIndexBundle(const IndexBundle& bundle) {
     record_offsets[i] = static_cast<double>(bundle.record_offsets[static_cast<size_t>(i)]);
   }
 
+  const int schema_out = 3;
   return Rcpp::List::create(
-    Rcpp::Named("schema_version") = 2L,
+    Rcpp::Named("schema_version") = schema_out,
     Rcpp::Named("format") = bundle.format,
     Rcpp::Named("record_size") = bundle.record_size,
     Rcpp::Named("files") = bundle.files,
@@ -337,12 +347,22 @@ IndexedFile deserializeIndexedFile(const Rcpp::List& payload, int schema_version
 
   indexed_file.index.total_lines = asUInt64(Rcpp::as<double>(payload["total_lines"]), "total_lines");
   indexed_file.record_count = asUInt64(Rcpp::as<double>(payload["record_count"]), "record_count");
+  if (payload.containsElementNamed("plain")) {
+    indexed_file.plain = Rcpp::as<bool>(payload["plain"]);
+  }
+  if (indexed_file.plain && payload.containsElementNamed("plain_header_byte_offsets")) {
+    Rcpp::NumericVector po = payload["plain_header_byte_offsets"];
+    indexed_file.plain_header_byte_offsets.reserve(static_cast<size_t>(po.size()));
+    for (R_xlen_t i = 0; i < po.size(); ++i) {
+      indexed_file.plain_header_byte_offsets.push_back(asUInt64(po[i], "plain_header_byte_offsets"));
+    }
+  }
   return indexed_file;
 }
 
 IndexBundle deserializeIndexBundle(const Rcpp::List& payload) {
   const int schema_version = Rcpp::as<int>(payload["schema_version"]);
-  if (schema_version != 1 && schema_version != 2) {
+  if (schema_version != 1 && schema_version != 2 && schema_version != 3) {
     throw std::runtime_error("Unsupported serialized index schema version.");
   }
 
@@ -389,6 +409,18 @@ bool readGzLine(gzFile stream, std::string& out) {
   }
 }
 
+bool fileHasGzipMagic(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in.good()) {
+    return false;
+  }
+  unsigned char b0 = 0;
+  unsigned char b1 = 0;
+  in.read(reinterpret_cast<char*>(&b0), 1);
+  in.read(reinterpret_cast<char*>(&b1), 1);
+  return in.good() && b0 == 0x1f && b1 == 0x8b;
+}
+
 std::string trimPrefix(const std::string& line, char prefix) {
   if (!line.empty() && line.front() == prefix) {
     return line.substr(1);
@@ -397,16 +429,40 @@ std::string trimPrefix(const std::string& line, char prefix) {
 }
 
 std::string openAndDetectType(const std::string& path) {
-  gzFile stream = gzopen(path.c_str(), "rb");
-  if (stream == nullptr) {
-    throw std::runtime_error("Could not open gzipped input: " + path);
+  if (fileHasGzipMagic(path)) {
+    gzFile stream = gzopen(path.c_str(), "rb");
+    if (stream == nullptr) {
+      throw std::runtime_error("Could not open gzipped input: " + path);
+    }
+    std::string line;
+    while (readGzLine(stream, line)) {
+      if (line.empty()) {
+        continue;
+      }
+      gzclose(stream);
+      if (line.front() == '>') {
+        return "fasta";
+      }
+      if (line.front() == '@') {
+        return "fastq";
+      }
+      throw std::runtime_error("Cannot infer type from first non-empty line in: " + path);
+    }
+    gzclose(stream);
+    throw std::runtime_error("Input appears empty: " + path);
+  }
+  std::ifstream in(path, std::ios::binary);
+  if (!in.good()) {
+    throw std::runtime_error("Could not open input: " + path);
   }
   std::string line;
-  while (readGzLine(stream, line)) {
+  while (std::getline(in, line)) {
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
     if (line.empty()) {
       continue;
     }
-    gzclose(stream);
     if (line.front() == '>') {
       return "fasta";
     }
@@ -415,7 +471,6 @@ std::string openAndDetectType(const std::string& path) {
     }
     throw std::runtime_error("Cannot infer type from first non-empty line in: " + path);
   }
-  gzclose(stream);
   throw std::runtime_error("Input appears empty: " + path);
 }
 
@@ -564,6 +619,195 @@ ParsedRecord parseRecordFromFixedLines(
   return ParsedRecord{trimPrefix(lines[offset], '>'), lines[offset + 1], ""};
 }
 
+std::uint64_t scanSequentialPlainRequestedRecords(
+  const std::string& file,
+  const std::string& type,
+  bool include_qual,
+  const std::unordered_set<std::uint64_t>& requested_local_ids,
+  const std::function<void(std::uint64_t, const ParsedRecord&)>& on_record
+  #ifdef FASTQINDEXR_TIMING
+  ,
+  ExtractionDiagnostics* diag
+  #endif
+) {
+  #ifdef FASTQINDEXR_TIMING
+  if (diag != nullptr) {
+    diag->fallback_invocations++;
+  }
+  const auto init_t0 = std::chrono::steady_clock::now();
+  #endif
+  std::ifstream stream(file, std::ios::binary);
+  if (!stream.good()) {
+    throw std::runtime_error("Fallback parser could not open plain file: " + file);
+  }
+  #ifdef FASTQINDEXR_TIMING
+  if (diag != nullptr) {
+    const auto init_t1 = std::chrono::steady_clock::now();
+    diag->time_sequential_init_ms +=
+      std::chrono::duration<double, std::milli>(init_t1 - init_t0).count();
+  }
+  #endif
+
+  std::vector<std::uint64_t> requested_sorted(requested_local_ids.begin(), requested_local_ids.end());
+  std::sort(requested_sorted.begin(), requested_sorted.end());
+  std::size_t requested_idx = 0;
+  auto is_requested = [&](std::uint64_t local_id) -> bool {
+    while (requested_idx < requested_sorted.size() && requested_sorted[requested_idx] < local_id) {
+      requested_idx++;
+    }
+    return requested_idx < requested_sorted.size() && requested_sorted[requested_idx] == local_id;
+  };
+
+  const bool is_fastq = (type == "fastq");
+  const int lines_per_record = is_fastq ? 4 : 2;
+  std::uint64_t local_id = 0;
+  std::uint64_t selected_count = 0;
+  bool capture_current_record = is_requested(local_id);
+  int line_in_record = 0;
+  std::string current_line;
+  current_line.reserve(256);
+  std::string header;
+  std::string seq;
+  std::string qual;
+  std::vector<char> buffer(kGzBufferSize * 8, '\0');
+  const std::string empty_line;
+
+  auto consume_line = [&](const std::string& line) {
+    #ifdef FASTQINDEXR_TIMING
+    const auto parse_t0 = std::chrono::steady_clock::now();
+    #endif
+    if (capture_current_record) {
+      if (is_fastq) {
+        if (line_in_record == 0) {
+          header = line;
+        } else if (line_in_record == 1) {
+          seq = line;
+        } else if (line_in_record == 3) {
+          qual = line;
+        }
+      } else {
+        if (line_in_record == 0) {
+          header = line;
+        } else if (line_in_record == 1) {
+          seq = line;
+        }
+      }
+    }
+    line_in_record++;
+    if (line_in_record == lines_per_record) {
+      #ifdef FASTQINDEXR_TIMING
+      if (diag != nullptr) {
+        const auto parse_t1 = std::chrono::steady_clock::now();
+        diag->time_sequential_parse_ms +=
+          std::chrono::duration<double, std::milli>(parse_t1 - parse_t0).count();
+      }
+      #endif
+      if (capture_current_record) {
+        #ifdef FASTQINDEXR_TIMING
+        const auto materialize_t0 = std::chrono::steady_clock::now();
+        #endif
+        const ParsedRecord rec{
+          trimPrefix(header, is_fastq ? '@' : '>'),
+          seq,
+          (is_fastq && include_qual) ? qual : ""
+        };
+        #ifdef FASTQINDEXR_TIMING
+        if (diag != nullptr) {
+          const auto materialize_t1 = std::chrono::steady_clock::now();
+          diag->time_sequential_materialize_ms +=
+            std::chrono::duration<double, std::milli>(materialize_t1 - materialize_t0).count();
+        }
+        const auto callback_t0 = std::chrono::steady_clock::now();
+        #endif
+        on_record(local_id, rec);
+        #ifdef FASTQINDEXR_TIMING
+        if (diag != nullptr) {
+          const auto callback_t1 = std::chrono::steady_clock::now();
+          diag->time_sequential_callback_ms +=
+            std::chrono::duration<double, std::milli>(callback_t1 - callback_t0).count();
+          diag->fallback_records++;
+        }
+        #endif
+        selected_count++;
+      }
+      local_id++;
+      capture_current_record = is_requested(local_id);
+      line_in_record = 0;
+      header.clear();
+      seq.clear();
+      qual.clear();
+      return;
+    }
+    #ifdef FASTQINDEXR_TIMING
+    if (diag != nullptr) {
+      const auto parse_t1 = std::chrono::steady_clock::now();
+      diag->time_sequential_parse_ms +=
+        std::chrono::duration<double, std::milli>(parse_t1 - parse_t0).count();
+    }
+    #endif
+  };
+
+  while (true) {
+    stream.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    const std::streamsize n_read_s = stream.gcount();
+    if (n_read_s <= 0) {
+      break;
+    }
+    const auto n_read = static_cast<std::size_t>(n_read_s);
+    #ifdef FASTQINDEXR_TIMING
+    const auto split_t0 = std::chrono::steady_clock::now();
+    #endif
+    std::size_t line_start = 0;
+    for (std::size_t i = 0; i < n_read; ++i) {
+      const char ch = buffer[i];
+      if (ch != '\n') {
+        continue;
+      }
+      std::size_t seg_end = i;
+      if (seg_end > line_start && buffer[seg_end - 1] == '\r') {
+        seg_end--;
+      }
+      if (capture_current_record) {
+        if (seg_end > line_start) {
+          const char* seg_ptr = buffer.data() + line_start;
+          const std::size_t seg_len = seg_end - line_start;
+          if (current_line.empty()) {
+            current_line.assign(seg_ptr, seg_len);
+          } else {
+            current_line.append(seg_ptr, seg_len);
+          }
+        }
+        consume_line(current_line);
+        current_line.clear();
+      } else {
+        consume_line(empty_line);
+      }
+      line_start = i + 1;
+    }
+    if (line_start < n_read && capture_current_record) {
+      const char* seg_ptr = buffer.data() + line_start;
+      const std::size_t seg_len = n_read - line_start;
+      if (current_line.empty()) {
+        current_line.assign(seg_ptr, seg_len);
+      } else {
+        current_line.append(seg_ptr, seg_len);
+      }
+    }
+    #ifdef FASTQINDEXR_TIMING
+    if (diag != nullptr) {
+      const auto split_t1 = std::chrono::steady_clock::now();
+      diag->time_sequential_line_split_ms +=
+        std::chrono::duration<double, std::milli>(split_t1 - split_t0).count();
+    }
+    #endif
+  }
+  if (!current_line.empty()) {
+    consume_line(current_line);
+  }
+
+  return selected_count;
+}
+
 std::uint64_t scanSequentialRequestedRecords(
   const std::string& file,
   const std::string& type,
@@ -575,6 +819,19 @@ std::uint64_t scanSequentialRequestedRecords(
   ExtractionDiagnostics* diag
   #endif
 ) {
+  if (!fileHasGzipMagic(file)) {
+    return scanSequentialPlainRequestedRecords(
+      file,
+      type,
+      include_qual,
+      requested_local_ids,
+      on_record
+      #ifdef FASTQINDEXR_TIMING
+      ,
+      diag
+      #endif
+    );
+  }
   #ifdef FASTQINDEXR_TIMING
   if (diag != nullptr) {
     diag->fallback_invocations++;
@@ -823,10 +1080,97 @@ ExtractExecutionMode parseExtractExecutionMode(const std::string& mode) {
   if (mode == "indexed") {
     return ExtractExecutionMode::Indexed;
   }
-  if (mode == "sequential_only") {
+  if (mode == "sequential_only" || mode == "sequential") {
     return ExtractExecutionMode::SequentialOnly;
   }
-  throw std::runtime_error("`extract_mode` must be 'indexed' or 'sequential_only'.");
+  throw std::runtime_error("`extract_mode` must be 'indexed', 'sequential', or 'sequential_only'.");
+}
+
+ParsedRecord readOneRecordFromPlainStream(
+  std::istream* in,
+  const std::string& type,
+  bool include_qual
+) {
+  std::string line;
+  std::string header;
+  std::string seq;
+  std::string qual;
+  const bool is_fastq = (type == "fastq");
+  const int lines_per_record = is_fastq ? 4 : 2;
+  for (int li = 0; li < lines_per_record; ++li) {
+    if (!std::getline(*in, line)) {
+      throw std::runtime_error("Unexpected EOF while reading plain FASTA/FASTQ record.");
+    }
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    if (li == 0) {
+      header = line;
+    } else if (li == 1) {
+      seq = line;
+    } else if (is_fastq && li == 3) {
+      qual = line;
+    }
+  }
+  const char prefix = is_fastq ? '@' : '>';
+  return ParsedRecord{
+    trimPrefix(header, prefix),
+    seq,
+    (is_fastq && include_qual) ? qual : ""
+  };
+}
+
+ParsedRecord readPlainRecordAtOffset(
+  const std::string& path,
+  std::uint64_t byte_offset,
+  const std::string& type,
+  bool include_qual
+) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in.good()) {
+    throw std::runtime_error("Could not open plain input: " + path);
+  }
+  in.seekg(static_cast<std::streamoff>(byte_offset), std::ios::beg);
+  if (!in.good()) {
+    throw std::runtime_error("Could not seek plain input: " + path);
+  }
+  return readOneRecordFromPlainStream(&in, type, include_qual);
+}
+
+IndexedFile buildPlainFileIndex(const std::string& path, int record_size) {
+  IndexedFile out;
+  out.plain = true;
+  std::ifstream in(path, std::ios::binary);
+  if (!in.good()) {
+    throw std::runtime_error("Could not open plain input for indexing: " + path);
+  }
+  std::uint64_t line_index = 0;
+  std::string line;
+  while (true) {
+    const std::streampos line_start = in.tellg();
+    if (!std::getline(in, line)) {
+      break;
+    }
+    if (line_index % static_cast<std::uint64_t>(record_size) == 0) {
+      if (line_start < 0) {
+        throw std::runtime_error("Could not track byte position in plain file: " + path);
+      }
+      out.plain_header_byte_offsets.push_back(static_cast<std::uint64_t>(line_start));
+    }
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    line_index++;
+  }
+  out.index.total_lines = line_index;
+  if (out.index.total_lines % static_cast<std::uint64_t>(record_size) != 0) {
+    throw std::runtime_error("Plain file line count is not a multiple of record size for: " + path);
+  }
+  out.record_count = out.index.total_lines / static_cast<std::uint64_t>(record_size);
+  if (out.plain_header_byte_offsets.size() != out.record_count) {
+    throw std::runtime_error("Plain index header offset count mismatch for: " + path);
+  }
+  return out;
 }
 
 bool requestIsSortedUnique(const std::vector<std::uint64_t>& requested) {
@@ -893,6 +1237,22 @@ SelectedRecordMap collectRequestedRecords(
         , diag
         #endif
       );
+      continue;
+    }
+    if (bundle.indexed_files[file_idx].plain && mode == ExtractExecutionMode::Indexed) {
+      const auto& offs = bundle.indexed_files[file_idx].plain_header_byte_offsets;
+      for (auto lid : local_ids) {
+        if (lid >= offs.size()) {
+          throw std::runtime_error("Requested id out of range for plain indexed file.");
+        }
+        ParsedRecord rec = readPlainRecordAtOffset(
+          Rcpp::as<std::string>(files[file_idx]),
+          offs[static_cast<size_t>(lid)],
+          bundle.format,
+          need_qual
+        );
+        selected_global[bundle.record_offsets[file_idx] + lid] = std::move(rec);
+      }
       continue;
     }
     #ifdef FASTQINDEXR_TIMING
@@ -1219,6 +1579,23 @@ double streamSortedUniqueToFile(
         , diag
         #endif
       );
+      continue;
+    }
+    if (bundle.indexed_files[file_idx].plain && mode == ExtractExecutionMode::Indexed) {
+      const auto& offs = bundle.indexed_files[file_idx].plain_header_byte_offsets;
+      for (auto lid : local_ids) {
+        if (lid >= offs.size()) {
+          throw std::runtime_error("Requested id out of range for plain indexed file.");
+        }
+        ParsedRecord rec = readPlainRecordAtOffset(
+          Rcpp::as<std::string>(files[file_idx]),
+          offs[static_cast<size_t>(lid)],
+          bundle.format,
+          need_qual
+        );
+        writer->write(renderRecord(rec, resolved_output_type));
+        n_written++;
+      }
       continue;
     }
     #ifdef FASTQINDEXR_TIMING
@@ -1598,6 +1975,31 @@ SEXP buildDNAStringSetFromRequested(
         }
         continue;
       }
+      if (bundle.indexed_files[file_idx].plain && mode == ExtractExecutionMode::Indexed) {
+        const auto& offs = bundle.indexed_files[file_idx].plain_header_byte_offsets;
+        for (auto lid : local_ids) {
+          if (lid >= offs.size()) {
+            throw std::runtime_error("Requested id out of range for plain indexed file.");
+          }
+          ParsedRecord rec = readPlainRecordAtOffset(
+            Rcpp::as<std::string>(files[file_idx]),
+            offs[static_cast<size_t>(lid)],
+            bundle.format,
+            false
+          );
+          appendRecordToDNAChunks(
+            rec,
+            chunk_chars_limit,
+            &seq_chunk,
+            &id_chunk,
+            &chunk_chars,
+            &output_index,
+            &dna_chunks,
+            renumber_mode
+          );
+        }
+        continue;
+      }
       #ifdef FASTQINDEXR_TIMING
       const auto plan_t0 = std::chrono::steady_clock::now();
       #endif
@@ -1805,6 +2207,91 @@ SEXP buildDNAStringSetFromRequested(
   return do_call(concat, dna_chunks);
 }
 
+std::uint64_t countPlainTotalLines(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in.good()) {
+    return 0;
+  }
+  std::uint64_t n = 0;
+  std::string line;
+  while (std::getline(in, line)) {
+    n++;
+  }
+  return n;
+}
+
+SelectedRecordMap collectSequentialScanStandalone(
+  Rcpp::CharacterVector files,
+  const std::vector<std::uint64_t>& record_offsets,
+  const std::string& format,
+  const std::vector<std::uint64_t>& unique_sorted_global_ids,
+  bool include_qual
+  #ifdef FASTQINDEXR_TIMING
+  ,
+  ExtractionDiagnostics* diag
+  #endif
+) {
+  const bool need_qual = (format == "fastq" && include_qual);
+  SelectedRecordMap selected_global;
+  selected_global.reserve(unique_sorted_global_ids.size());
+
+  std::vector<std::vector<std::uint64_t>> local_ids_by_file(static_cast<size_t>(files.size()));
+  for (auto gid : unique_sorted_global_ids) {
+    auto up = std::upper_bound(record_offsets.begin(), record_offsets.end(), gid);
+    if (up == record_offsets.begin() || up == record_offsets.end()) {
+      throw std::runtime_error("Requested id out of range for scanned files.");
+    }
+    size_t file_idx = static_cast<size_t>((up - record_offsets.begin()) - 1);
+    if (file_idx >= static_cast<size_t>(files.size())) {
+      file_idx = static_cast<size_t>(files.size()) - 1;
+    }
+    const std::uint64_t local_id = gid - record_offsets[file_idx];
+    local_ids_by_file[file_idx].push_back(local_id);
+  }
+
+  for (size_t file_idx = 0; file_idx < local_ids_by_file.size(); ++file_idx) {
+    std::vector<std::uint64_t> local_ids = local_ids_by_file[file_idx];
+    if (local_ids.empty()) {
+      continue;
+    }
+    std::sort(local_ids.begin(), local_ids.end());
+    local_ids.erase(std::unique(local_ids.begin(), local_ids.end()), local_ids.end());
+    const std::unordered_set<std::uint64_t> requested_set(local_ids.begin(), local_ids.end());
+    const std::string fpath = Rcpp::as<std::string>(files[static_cast<R_xlen_t>(file_idx)]);
+    if (fileHasGzipMagic(fpath)) {
+      scanSequentialRequestedRecords(
+        fpath,
+        format,
+        need_qual,
+        requested_set,
+        [&](std::uint64_t local_id, const ParsedRecord& rec) {
+          selected_global[record_offsets[file_idx] + local_id] = rec;
+        }
+        #ifdef FASTQINDEXR_TIMING
+        ,
+        diag
+        #endif
+      );
+    } else {
+      scanSequentialPlainRequestedRecords(
+        fpath,
+        format,
+        need_qual,
+        requested_set,
+        [&](std::uint64_t local_id, const ParsedRecord& rec) {
+          selected_global[record_offsets[file_idx] + local_id] = rec;
+        }
+        #ifdef FASTQINDEXR_TIMING
+        ,
+        diag
+        #endif
+      );
+    }
+  }
+
+  return selected_global;
+}
+
 }  // namespace
 
 // [[Rcpp::export]]
@@ -1832,13 +2319,21 @@ Rcpp::List cpp_create_index(Rcpp::CharacterVector files, std::string type) {
   bundle.record_offsets.push_back(0);
 
   Rcpp::NumericVector per_file_counts(paths.size());
+  Rcpp::CharacterVector file_compression(static_cast<R_xlen_t>(paths.size()));
   for (size_t i = 0; i < paths.size(); ++i) {
     IndexedFile idxf;
-    idxf.index = indexer.createIndex(paths[i]);
-    if (idxf.index.total_lines % static_cast<std::uint64_t>(record_size) != 0) {
-      throw std::runtime_error("Indexed line count is not a multiple of record size for: " + paths[i]);
+    if (fileHasGzipMagic(paths[i])) {
+      idxf.index = indexer.createIndex(paths[i]);
+      idxf.plain = false;
+      if (idxf.index.total_lines % static_cast<std::uint64_t>(record_size) != 0) {
+        throw std::runtime_error("Indexed line count is not a multiple of record size for: " + paths[i]);
+      }
+      idxf.record_count = idxf.index.total_lines / static_cast<std::uint64_t>(record_size);
+      file_compression[static_cast<R_xlen_t>(i)] = "gzip";
+    } else {
+      idxf = buildPlainFileIndex(paths[i], record_size);
+      file_compression[static_cast<R_xlen_t>(i)] = "plain";
     }
-    idxf.record_count = idxf.index.total_lines / static_cast<std::uint64_t>(record_size);
     bundle.indexed_files.push_back(std::move(idxf));
     bundle.n_records += bundle.indexed_files.back().record_count;
     bundle.record_offsets.push_back(bundle.n_records);
@@ -1863,6 +2358,7 @@ Rcpp::List cpp_create_index(Rcpp::CharacterVector files, std::string type) {
     Rcpp::Named("index_payload") = payload,
     Rcpp::Named("index_ptr") = index_ptr,
     Rcpp::Named("record_size") = record_size,
+    Rcpp::Named("file_compression") = file_compression,
     Rcpp::Named("engine") = "upstream_adapted_v2"
   );
 }
@@ -1925,6 +2421,11 @@ Rcpp::List cpp_read_fqi_index(
     offsets[i] = static_cast<double>((*index_ptr).record_offsets[static_cast<size_t>(i)]);
   }
 
+  Rcpp::CharacterVector file_compression(static_cast<R_xlen_t>(data_paths.size()));
+  for (R_xlen_t i = 0; i < file_compression.size(); ++i) {
+    file_compression[i] = "gzip";
+  }
+
   return Rcpp::List::create(
     Rcpp::Named("format") = type,
     Rcpp::Named("files") = files,
@@ -1936,6 +2437,7 @@ Rcpp::List cpp_read_fqi_index(
     Rcpp::Named("index_payload") = payload,
     Rcpp::Named("index_ptr") = index_ptr,
     Rcpp::Named("record_size") = record_size,
+    Rcpp::Named("file_compression") = file_compression,
     Rcpp::Named("engine") = "upstream_cli_fqi_v1"
   );
 }
@@ -2263,6 +2765,433 @@ SEXP cpp_extract_sequences_dnastringset(
     diag_ptr
     #endif
   );
+  #ifdef FASTQINDEXR_TIMING
+  if (diagnostics && diag_ptr != nullptr) {
+    Rf_setAttrib(out, Rf_install("fastqindexr_diagnostics"), diagnosticsToList(diag));
+  }
+  #endif
+  return out;
+}
+
+// [[Rcpp::export]]
+std::string cpp_detect_input_format(std::string path) {
+  return openAndDetectType(path);
+}
+
+// [[Rcpp::export]]
+Rcpp::NumericVector cpp_scan_record_offsets(Rcpp::CharacterVector files, std::string type) {
+  if (type != "fasta" && type != "fastq") {
+    throw std::runtime_error("`type` must be 'fasta' or 'fastq'.");
+  }
+  const int record_size = (type == "fastq") ? 4 : 2;
+  Rcpp::NumericVector offsets(files.size() + 1);
+  offsets[0] = 0.0;
+  std::uint64_t cum = 0;
+  for (R_xlen_t i = 0; i < files.size(); ++i) {
+    const std::string p = Rcpp::as<std::string>(files[i]);
+    std::uint64_t total_lines = 0;
+    if (fileHasGzipMagic(p)) {
+      total_lines = countGzLines(p);
+    } else {
+      total_lines = countPlainTotalLines(p);
+    }
+    if (total_lines % static_cast<std::uint64_t>(record_size) != 0) {
+      throw std::runtime_error("Line count is not a multiple of record size for: " + p);
+    }
+    cum += total_lines / static_cast<std::uint64_t>(record_size);
+    offsets[i + 1] = static_cast<double>(cum);
+  }
+  return offsets;
+}
+
+// [[Rcpp::export]]
+Rcpp::List cpp_extract_sequences_streaming(
+  Rcpp::CharacterVector files,
+  std::string type,
+  Rcpp::NumericVector ids_zero_based,
+  Rcpp::NumericVector record_offsets_r,
+  bool include_qual,
+  bool diagnostics
+) {
+  if (type != "fasta" && type != "fastq") {
+    throw std::runtime_error("`type` must be 'fasta' or 'fastq'.");
+  }
+  if (static_cast<size_t>(record_offsets_r.size()) != static_cast<size_t>(files.size()) + 1) {
+    throw std::runtime_error("`record_offsets` must have length length(files) + 1.");
+  }
+  #ifdef FASTQINDEXR_TIMING
+  ExtractionDiagnostics diag;
+  ExtractionDiagnostics* diag_ptr = diagnosticsPtrIfEnabled(&diag, diagnostics);
+  #endif
+
+  const bool return_qual = (type == "fastq" && include_qual);
+  if (ids_zero_based.size() < 1) {
+    if (return_qual) {
+      return Rcpp::List::create(
+        Rcpp::Named("seq_id") = Rcpp::CharacterVector(),
+        Rcpp::Named("seq") = Rcpp::CharacterVector(),
+        Rcpp::Named("qual") = Rcpp::CharacterVector()
+      );
+    }
+    return Rcpp::List::create(
+      Rcpp::Named("seq_id") = Rcpp::CharacterVector(),
+      Rcpp::Named("seq") = Rcpp::CharacterVector()
+    );
+  }
+
+  std::vector<std::uint64_t> roff;
+  roff.reserve(static_cast<size_t>(record_offsets_r.size()));
+  for (R_xlen_t i = 0; i < record_offsets_r.size(); ++i) {
+    roff.push_back(asUInt64(record_offsets_r[i], "record_offsets"));
+  }
+
+  const std::vector<std::uint64_t> requested = parseRequestedIds(ids_zero_based);
+  R_xlen_t n = ids_zero_based.size();
+  std::unordered_map<std::uint64_t, std::vector<R_xlen_t>> positions_by_gid;
+  positions_by_gid.reserve(static_cast<size_t>(requested.size()));
+  for (R_xlen_t i = 0; i < n; ++i) {
+    positions_by_gid[requested[static_cast<size_t>(i)]].push_back(i);
+  }
+  std::vector<std::uint64_t> unique_ids;
+  unique_ids.reserve(positions_by_gid.size());
+  for (const auto& kv : positions_by_gid) {
+    unique_ids.push_back(kv.first);
+  }
+  std::sort(unique_ids.begin(), unique_ids.end());
+
+  const SelectedRecordMap selected_global = collectSequentialScanStandalone(
+    files,
+    roff,
+    type,
+    unique_ids,
+    include_qual
+    #ifdef FASTQINDEXR_TIMING
+    ,
+    diag_ptr
+    #endif
+  );
+
+  Rcpp::CharacterVector out_id(n);
+  Rcpp::CharacterVector out_seq(n);
+  Rcpp::CharacterVector out_qual;
+  if (return_qual) {
+    out_qual = Rcpp::CharacterVector(n);
+  }
+
+  for (std::uint64_t gid : unique_ids) {
+    auto rec_it = selected_global.find(gid);
+    if (rec_it == selected_global.end()) {
+      throw std::runtime_error("Could not resolve all requested ids (streaming scan).");
+    }
+    const ParsedRecord& rec = rec_it->second;
+    SEXP id_ch = Rf_mkCharLen(rec.id.c_str(), static_cast<int>(rec.id.size()));
+    SEXP seq_ch = Rf_mkCharLen(rec.seq.c_str(), static_cast<int>(rec.seq.size()));
+    SEXP qual_ch = R_NilValue;
+    if (return_qual) {
+      qual_ch = Rf_mkCharLen(rec.qual.c_str(), static_cast<int>(rec.qual.size()));
+    }
+    const auto pos_it = positions_by_gid.find(gid);
+    if (pos_it == positions_by_gid.end()) {
+      continue;
+    }
+    for (R_xlen_t pos : pos_it->second) {
+      SET_STRING_ELT(out_id, pos, id_ch);
+      SET_STRING_ELT(out_seq, pos, seq_ch);
+      if (return_qual) {
+        SET_STRING_ELT(out_qual, pos, qual_ch);
+      }
+    }
+  }
+
+  if (return_qual) {
+    Rcpp::List out = Rcpp::List::create(
+      Rcpp::Named("seq_id") = out_id,
+      Rcpp::Named("seq") = out_seq,
+      Rcpp::Named("qual") = out_qual
+    );
+    #ifdef FASTQINDEXR_TIMING
+    if (diagnostics && diag_ptr != nullptr) {
+      out.attr("fastqindexr_diagnostics") = diagnosticsToList(diag);
+    }
+    #endif
+    return out;
+  }
+  Rcpp::List out = Rcpp::List::create(
+    Rcpp::Named("seq_id") = out_id,
+    Rcpp::Named("seq") = out_seq
+  );
+  #ifdef FASTQINDEXR_TIMING
+  if (diagnostics && diag_ptr != nullptr) {
+    out.attr("fastqindexr_diagnostics") = diagnosticsToList(diag);
+  }
+  #endif
+  return out;
+}
+
+// [[Rcpp::export]]
+Rcpp::List cpp_extract_sequences_to_file_streaming(
+  Rcpp::CharacterVector files,
+  std::string source_type,
+  Rcpp::NumericVector ids_zero_based,
+  Rcpp::NumericVector record_offsets_r,
+  std::string output_type,
+  std::string outfile,
+  bool append,
+  bool compress,
+  bool diagnostics
+) {
+  if (source_type != "fasta" && source_type != "fastq") {
+    throw std::runtime_error("`source_type` must be 'fasta' or 'fastq'.");
+  }
+  if (static_cast<size_t>(record_offsets_r.size()) != static_cast<size_t>(files.size()) + 1) {
+    throw std::runtime_error("`record_offsets` must have length length(files) + 1.");
+  }
+  #ifdef FASTQINDEXR_TIMING
+  ExtractionDiagnostics diag;
+  ExtractionDiagnostics* diag_ptr = diagnosticsPtrIfEnabled(&diag, diagnostics);
+  #endif
+
+  if (ids_zero_based.size() < 1) {
+    Rcpp::List out = Rcpp::List::create(Rcpp::Named("written") = 0.0);
+    #ifdef FASTQINDEXR_TIMING
+    if (diagnostics && diag_ptr != nullptr) {
+      out.attr("fastqindexr_diagnostics") = diagnosticsToList(diag);
+    }
+    #endif
+    return out;
+  }
+
+  std::vector<std::uint64_t> roff;
+  roff.reserve(static_cast<size_t>(record_offsets_r.size()));
+  for (R_xlen_t i = 0; i < record_offsets_r.size(); ++i) {
+    roff.push_back(asUInt64(record_offsets_r[i], "record_offsets"));
+  }
+
+  const std::string resolved_output_type = resolveOutputType(output_type, source_type);
+  const std::vector<std::uint64_t> requested = parseRequestedIds(ids_zero_based);
+  const bool need_parsed_qual = (resolved_output_type == "fastq");
+
+  if (requestIsSortedUnique(requested) && !append) {
+    std::unique_ptr<OutputWriter> writer = makeOutputWriter(outfile, false, compress);
+    std::uint64_t n_written = 0;
+    std::vector<std::vector<std::uint64_t>> local_ids_by_file(static_cast<size_t>(files.size()));
+    for (auto gid : requested) {
+      auto up = std::upper_bound(roff.begin(), roff.end(), gid);
+      if (up == roff.begin() || up == roff.end()) {
+        throw std::runtime_error("Requested id out of range for streaming extract.");
+      }
+      size_t file_idx = static_cast<size_t>((up - roff.begin()) - 1);
+      if (file_idx >= static_cast<size_t>(files.size())) {
+        file_idx = static_cast<size_t>(files.size()) - 1;
+      }
+      const std::uint64_t local_id = gid - roff[file_idx];
+      local_ids_by_file[file_idx].push_back(local_id);
+    }
+    for (size_t file_idx = 0; file_idx < local_ids_by_file.size(); ++file_idx) {
+      std::vector<std::uint64_t> local_ids = std::move(local_ids_by_file[file_idx]);
+      if (local_ids.empty()) {
+        continue;
+      }
+      const std::unordered_set<std::uint64_t> requested_set(local_ids.begin(), local_ids.end());
+      const bool need_qual = (source_type == "fastq" && need_parsed_qual);
+      const std::string fpath = Rcpp::as<std::string>(files[static_cast<R_xlen_t>(file_idx)]);
+      if (fileHasGzipMagic(fpath)) {
+        scanSequentialRequestedRecords(
+          fpath,
+          source_type,
+          need_qual,
+          requested_set,
+          [&](std::uint64_t, const ParsedRecord& rec) {
+            writer->write(renderRecord(rec, resolved_output_type));
+            n_written++;
+          }
+          #ifdef FASTQINDEXR_TIMING
+          ,
+          diag_ptr
+          #endif
+        );
+      } else {
+        scanSequentialPlainRequestedRecords(
+          fpath,
+          source_type,
+          need_qual,
+          requested_set,
+          [&](std::uint64_t, const ParsedRecord& rec) {
+            writer->write(renderRecord(rec, resolved_output_type));
+            n_written++;
+          }
+          #ifdef FASTQINDEXR_TIMING
+          ,
+          diag_ptr
+          #endif
+        );
+      }
+    }
+    Rcpp::List out = Rcpp::List::create(Rcpp::Named("written") = static_cast<double>(n_written));
+    #ifdef FASTQINDEXR_TIMING
+    if (diagnostics && diag_ptr != nullptr) {
+      out.attr("fastqindexr_diagnostics") = diagnosticsToList(diag);
+    }
+    #endif
+    return out;
+  }
+
+  std::vector<std::uint64_t> unique_sorted = requested;
+  std::sort(unique_sorted.begin(), unique_sorted.end());
+  unique_sorted.erase(std::unique(unique_sorted.begin(), unique_sorted.end()), unique_sorted.end());
+
+  const SelectedRecordMap selected_global = collectSequentialScanStandalone(
+    files,
+    roff,
+    source_type,
+    unique_sorted,
+    need_parsed_qual
+    #ifdef FASTQINDEXR_TIMING
+    ,
+    diag_ptr
+    #endif
+  );
+
+  std::unique_ptr<OutputWriter> writer = makeOutputWriter(outfile, append, compress);
+  std::uint64_t written = 0;
+  for (auto gid : requested) {
+    auto it = selected_global.find(gid);
+    if (it == selected_global.end()) {
+      throw std::runtime_error("Could not resolve all requested ids (streaming extract).");
+    }
+    writer->write(renderRecord(it->second, resolved_output_type));
+    written++;
+  }
+  Rcpp::List out = Rcpp::List::create(
+    Rcpp::Named("written") = static_cast<double>(written)
+  );
+  #ifdef FASTQINDEXR_TIMING
+  if (diagnostics && diag_ptr != nullptr) {
+    out.attr("fastqindexr_diagnostics") = diagnosticsToList(diag);
+  }
+  #endif
+  return out;
+}
+
+// [[Rcpp::export]]
+SEXP cpp_extract_sequences_dnastringset_streaming(
+  Rcpp::CharacterVector files,
+  std::string source_type,
+  Rcpp::NumericVector ids_zero_based,
+  Rcpp::NumericVector record_offsets_r,
+  double chunk_chars,
+  bool diagnostics,
+  std::string renumber_mode
+) {
+  if (source_type != "fasta" && source_type != "fastq") {
+    throw std::runtime_error("`source_type` must be 'fasta' or 'fastq'.");
+  }
+  if (static_cast<size_t>(record_offsets_r.size()) != static_cast<size_t>(files.size()) + 1) {
+    throw std::runtime_error("`record_offsets` must have length length(files) + 1.");
+  }
+  if (!std::isfinite(chunk_chars) || chunk_chars <= 0.0) {
+    throw std::runtime_error("`chunk_chars` must be a finite positive value.");
+  }
+  if (renumber_mode != "none" &&
+      renumber_mode != "zero_based" &&
+      renumber_mode != "one_based") {
+    throw std::runtime_error("Invalid renumber mode.");
+  }
+  #ifdef FASTQINDEXR_TIMING
+  ExtractionDiagnostics diag;
+  ExtractionDiagnostics* diag_ptr = diagnosticsPtrIfEnabled(&diag, diagnostics);
+  #endif
+
+  if (ids_zero_based.size() == 0) {
+    Rcpp::Environment biostrings = Rcpp::Environment::namespace_env("Biostrings");
+    Rcpp::Function dna_string_set = biostrings["DNAStringSet"];
+    SEXP empty = dna_string_set(Rcpp::CharacterVector(), Rcpp::Named("use.names") = true);
+    #ifdef FASTQINDEXR_TIMING
+    if (diagnostics && diag_ptr != nullptr) {
+      Rf_setAttrib(empty, Rf_install("fastqindexr_diagnostics"), diagnosticsToList(diag));
+    }
+    #endif
+    return empty;
+  }
+
+  std::vector<std::uint64_t> roff;
+  roff.reserve(static_cast<size_t>(record_offsets_r.size()));
+  for (R_xlen_t i = 0; i < record_offsets_r.size(); ++i) {
+    roff.push_back(asUInt64(record_offsets_r[i], "record_offsets"));
+  }
+
+  const std::vector<std::uint64_t> requested = parseRequestedIds(ids_zero_based);
+  std::vector<std::uint64_t> unique_ids = requested;
+  std::sort(unique_ids.begin(), unique_ids.end());
+  unique_ids.erase(std::unique(unique_ids.begin(), unique_ids.end()), unique_ids.end());
+
+  const SelectedRecordMap selected_global = collectSequentialScanStandalone(
+    files,
+    roff,
+    source_type,
+    unique_ids,
+    false
+    #ifdef FASTQINDEXR_TIMING
+    ,
+    diag_ptr
+    #endif
+  );
+
+  std::vector<std::string> seq_chunk;
+  std::vector<std::string> id_chunk;
+  seq_chunk.reserve(1024);
+  id_chunk.reserve(1024);
+  Rcpp::List dna_chunks;
+  std::uint64_t chunk_chars_u = static_cast<std::uint64_t>(chunk_chars);
+  std::uint64_t chunk_chars_acc = 0;
+  std::uint64_t output_index = 0;
+
+  for (auto gid : requested) {
+    auto it = selected_global.find(gid);
+    if (it == selected_global.end()) {
+      throw std::runtime_error("Could not resolve all requested ids (streaming DNA extract).");
+    }
+    appendRecordToDNAChunks(
+      it->second,
+      chunk_chars_u,
+      &seq_chunk,
+      &id_chunk,
+      &chunk_chars_acc,
+      &output_index,
+      &dna_chunks,
+      renumber_mode
+    );
+  }
+
+  if (!seq_chunk.empty()) {
+    const std::uint64_t chunk_start = output_index - seq_chunk.size();
+    flushDNAChunk(&seq_chunk, &id_chunk, &dna_chunks, renumber_mode, chunk_start);
+  }
+
+  if (dna_chunks.size() == 0) {
+    Rcpp::Environment biostrings = Rcpp::Environment::namespace_env("Biostrings");
+    Rcpp::Function dna_string_set = biostrings["DNAStringSet"];
+    SEXP empty = dna_string_set(Rcpp::CharacterVector(), Rcpp::Named("use.names") = true);
+    #ifdef FASTQINDEXR_TIMING
+    if (diagnostics && diag_ptr != nullptr) {
+      Rf_setAttrib(empty, Rf_install("fastqindexr_diagnostics"), diagnosticsToList(diag));
+    }
+    #endif
+    return empty;
+  }
+  if (dna_chunks.size() == 1) {
+    SEXP one = dna_chunks[0];
+    #ifdef FASTQINDEXR_TIMING
+    if (diagnostics && diag_ptr != nullptr) {
+      Rf_setAttrib(one, Rf_install("fastqindexr_diagnostics"), diagnosticsToList(diag));
+    }
+    #endif
+    return one;
+  }
+  Rcpp::Environment base = Rcpp::Environment::base_env();
+  Rcpp::Function do_call = base["do.call"];
+  Rcpp::Function concat = base["c"];
+  SEXP out = do_call(concat, dna_chunks);
   #ifdef FASTQINDEXR_TIMING
   if (diagnostics && diag_ptr != nullptr) {
     Rf_setAttrib(out, Rf_install("fastqindexr_diagnostics"), diagnosticsToList(diag));

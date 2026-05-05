@@ -5,11 +5,13 @@
 \title{Extract sequence records as a DNAStringSet}
 \usage{
 extract_sequences_dnastringset(
-  index,
+  index = NULL,
   seq_idx,
   file = NULL,
   renumber = c("none", "zero_based", "one_based"),
-  chunk_chars = 1e+07
+  chunk_chars = 1e+07,
+  mode = c("auto", "indexed", "sequential"),
+  type = c("auto", "fasta", "fastq")
 )
 }
 \arguments{

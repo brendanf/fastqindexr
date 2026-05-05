@@ -20,10 +20,10 @@ bench_cache_file <- function(name) {
   file.path(cache_dir, name)
 }
 
-bench_case <- function(label, idx, ids, return = "data.frame") {
+bench_case <- function(label, idx, ids, return = "data.frame", mode = "auto") {
   gc(reset = TRUE)
   t <- system.time({
-    out <- extract_sequences(idx, ids, return = return)
+    out <- extract_sequences(idx, ids, return = return, mode = mode)
   })
   diag <- attr(out, "fastqindexr_diagnostics", exact = TRUE)
   diag_txt <- ""
@@ -56,7 +56,8 @@ bench_with_tuning <- function(
   max_bridge_gap = 64,
   max_region_records = 2147483647,
   extract_mode = "indexed",
-  diagnostics = TRUE
+  diagnostics = TRUE,
+  mode = "auto"
 ) {
   old_opts <- options(
     fastqindexr.max_bridge_gap = max_bridge_gap,
@@ -65,17 +66,18 @@ bench_with_tuning <- function(
     fastqindexr.extract_diagnostics = diagnostics
   )
   on.exit(options(old_opts), add = TRUE)
-  bench_case(label, idx, ids, return = return)
+  bench_case(label, idx, ids, return = return, mode = mode)
 }
 
 bench_region_matrix <- function(idx, label_prefix, ids, tuning_grid) {
-  lab <- sprintf("%s mode=sequential_only", label_prefix)
+  lab <- sprintf("%s mode=sequential", label_prefix)
   bench_with_tuning(
     lab,
     idx,
     ids,
     "data.frame",
-    extract_mode = "sequential_only"
+    extract_mode = "indexed",
+    mode = "sequential"
   )
   for (i in seq_len(nrow(tuning_grid))) {
     bridge <- tuning_grid$max_bridge_gap[[i]]
@@ -97,14 +99,16 @@ bench_mode_compare <- function(idx, label_prefix, ids) {
     idx,
     ids,
     return = "data.frame",
-    extract_mode = "indexed"
+    extract_mode = "indexed",
+    mode = "auto"
   )
   bench_with_tuning(
-    sprintf("%s mode=sequential_only", label_prefix),
+    sprintf("%s mode=sequential", label_prefix),
     idx,
     ids,
     return = "data.frame",
-    extract_mode = "sequential_only"
+    extract_mode = "indexed",
+    mode = "sequential"
   )
 }
 

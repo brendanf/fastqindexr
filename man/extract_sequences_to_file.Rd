@@ -5,13 +5,16 @@
 \title{Extract sequence records by ID and stream directly to file}
 \usage{
 extract_sequences_to_file(
-  index,
+  index = NULL,
   seq_idx,
   file = NULL,
   outfile,
   type = c("auto", "fasta", "fastq"),
   append = FALSE,
-  compress = endsWith(tolower(outfile), ".gz")
+  compress = endsWith(tolower(outfile), ".gz"),
+  mode = c("auto", "indexed", "sequential"),
+  input_type = c("auto", "fasta", "fastq"),
+  renumber = c("none", "zero_based", "one_based")
 )
 }
 \arguments{

@@ -118,6 +118,81 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// cpp_detect_input_format
+std::string cpp_detect_input_format(std::string path);
+RcppExport SEXP _fastqindexr_cpp_detect_input_format(SEXP pathSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type path(pathSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_detect_input_format(path));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cpp_scan_record_offsets
+Rcpp::NumericVector cpp_scan_record_offsets(Rcpp::CharacterVector files, std::string type);
+RcppExport SEXP _fastqindexr_cpp_scan_record_offsets(SEXP filesSEXP, SEXP typeSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type files(filesSEXP);
+    Rcpp::traits::input_parameter< std::string >::type type(typeSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_scan_record_offsets(files, type));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cpp_extract_sequences_streaming
+Rcpp::List cpp_extract_sequences_streaming(Rcpp::CharacterVector files, std::string type, Rcpp::NumericVector ids_zero_based, Rcpp::NumericVector record_offsets_r, bool include_qual, bool diagnostics);
+RcppExport SEXP _fastqindexr_cpp_extract_sequences_streaming(SEXP filesSEXP, SEXP typeSEXP, SEXP ids_zero_basedSEXP, SEXP record_offsets_rSEXP, SEXP include_qualSEXP, SEXP diagnosticsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type files(filesSEXP);
+    Rcpp::traits::input_parameter< std::string >::type type(typeSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type ids_zero_based(ids_zero_basedSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type record_offsets_r(record_offsets_rSEXP);
+    Rcpp::traits::input_parameter< bool >::type include_qual(include_qualSEXP);
+    Rcpp::traits::input_parameter< bool >::type diagnostics(diagnosticsSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_extract_sequences_streaming(files, type, ids_zero_based, record_offsets_r, include_qual, diagnostics));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cpp_extract_sequences_to_file_streaming
+Rcpp::List cpp_extract_sequences_to_file_streaming(Rcpp::CharacterVector files, std::string source_type, Rcpp::NumericVector ids_zero_based, Rcpp::NumericVector record_offsets_r, std::string output_type, std::string outfile, bool append, bool compress, bool diagnostics);
+RcppExport SEXP _fastqindexr_cpp_extract_sequences_to_file_streaming(SEXP filesSEXP, SEXP source_typeSEXP, SEXP ids_zero_basedSEXP, SEXP record_offsets_rSEXP, SEXP output_typeSEXP, SEXP outfileSEXP, SEXP appendSEXP, SEXP compressSEXP, SEXP diagnosticsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type files(filesSEXP);
+    Rcpp::traits::input_parameter< std::string >::type source_type(source_typeSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type ids_zero_based(ids_zero_basedSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type record_offsets_r(record_offsets_rSEXP);
+    Rcpp::traits::input_parameter< std::string >::type output_type(output_typeSEXP);
+    Rcpp::traits::input_parameter< std::string >::type outfile(outfileSEXP);
+    Rcpp::traits::input_parameter< bool >::type append(appendSEXP);
+    Rcpp::traits::input_parameter< bool >::type compress(compressSEXP);
+    Rcpp::traits::input_parameter< bool >::type diagnostics(diagnosticsSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_extract_sequences_to_file_streaming(files, source_type, ids_zero_based, record_offsets_r, output_type, outfile, append, compress, diagnostics));
+    return rcpp_result_gen;
+END_RCPP
+}
+// cpp_extract_sequences_dnastringset_streaming
+SEXP cpp_extract_sequences_dnastringset_streaming(Rcpp::CharacterVector files, std::string source_type, Rcpp::NumericVector ids_zero_based, Rcpp::NumericVector record_offsets_r, double chunk_chars, bool diagnostics, std::string renumber_mode);
+RcppExport SEXP _fastqindexr_cpp_extract_sequences_dnastringset_streaming(SEXP filesSEXP, SEXP source_typeSEXP, SEXP ids_zero_basedSEXP, SEXP record_offsets_rSEXP, SEXP chunk_charsSEXP, SEXP diagnosticsSEXP, SEXP renumber_modeSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type files(filesSEXP);
+    Rcpp::traits::input_parameter< std::string >::type source_type(source_typeSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type ids_zero_based(ids_zero_basedSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type record_offsets_r(record_offsets_rSEXP);
+    Rcpp::traits::input_parameter< double >::type chunk_chars(chunk_charsSEXP);
+    Rcpp::traits::input_parameter< bool >::type diagnostics(diagnosticsSEXP);
+    Rcpp::traits::input_parameter< std::string >::type renumber_mode(renumber_modeSEXP);
+    rcpp_result_gen = Rcpp::wrap(cpp_extract_sequences_dnastringset_streaming(files, source_type, ids_zero_based, record_offsets_r, chunk_chars, diagnostics, renumber_mode));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_fastqindexr_cpp_create_index", (DL_FUNC) &_fastqindexr_cpp_create_index, 2},
@@ -127,6 +202,11 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastqindexr_cpp_extract_sequences", (DL_FUNC) &_fastqindexr_cpp_extract_sequences, 9},
     {"_fastqindexr_cpp_extract_sequences_to_file", (DL_FUNC) &_fastqindexr_cpp_extract_sequences_to_file, 12},
     {"_fastqindexr_cpp_extract_sequences_dnastringset", (DL_FUNC) &_fastqindexr_cpp_extract_sequences_dnastringset, 10},
+    {"_fastqindexr_cpp_detect_input_format", (DL_FUNC) &_fastqindexr_cpp_detect_input_format, 1},
+    {"_fastqindexr_cpp_scan_record_offsets", (DL_FUNC) &_fastqindexr_cpp_scan_record_offsets, 2},
+    {"_fastqindexr_cpp_extract_sequences_streaming", (DL_FUNC) &_fastqindexr_cpp_extract_sequences_streaming, 6},
+    {"_fastqindexr_cpp_extract_sequences_to_file_streaming", (DL_FUNC) &_fastqindexr_cpp_extract_sequences_to_file_streaming, 9},
+    {"_fastqindexr_cpp_extract_sequences_dnastringset_streaming", (DL_FUNC) &_fastqindexr_cpp_extract_sequences_dnastringset_streaming, 7},
     {NULL, NULL, 0}
 };
 

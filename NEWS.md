@@ -1,20 +1,32 @@
 # fastqindexr (development version)
 
-- Fix a bug reading certain .fqi indexes written by FastqIndEx.
-- Fix a bug when reusing the same index for many small extractions.
-- Add `partition_seq_idx()` for stable contiguous or round-robin partitioning
-  of requested sequence IDs while preserving order and duplicates.
-- Extend `extract_sequences_to_file()` with partitioned mode by passing a list
-  to `seq_idx` and a matching vector to `outfile`. Supports scalar/vector
-  `compress` and preserves strict-increasing fast-path behavior per partition.
-- Add `extract_sequences_dnastringset()` with chunked construction of
-  `Biostrings::DNAStringSet` for improved large-request memory behavior.
-- Add similar chunked extraction to `extract_sequences()` for reduced memory usage in large extracts.
-- Add session-level region-merge tuning for extraction via options
-  `fastqindexr.max_bridge_gap`, which controls the maximum number of contiguous non-requested
-  sequences in an extraction chunk, and `fastqindexr.max_region_records` which controls the maximum
-  size of a chunk.
-- Major performance increases for sparse extractions.
+- Add extraction `mode = c("auto", "indexed", "sequential")` across
+  `extract_sequences()`, `extract_sequences_to_file()`, and
+  `extract_sequences_dnastringset()`. Keep
+  `fastqindexr.extract_mode` as a transition option and deprecate
+  `"sequential_only"` in favor of `"sequential"`.
+- Support sequential extraction without a live native pointer: with
+  `index = NULL`, extraction streams directly from source file(s)
+  (`file`, `type`), and with `mode = "sequential"` extraction can run
+  from serialized index metadata after `saveRDS()` / `readRDS()`.
+- Extend index creation and indexed extraction to uncompressed FASTA/FASTQ
+  alongside gzip inputs.
+- Extend index metadata/payload with per-file compression and plain-file
+  byte offsets (`schema_version` v3), while preserving back-compat reads
+  of earlier payload versions.
+- Add `partition_seq_idx()` and extend partition-aware extraction:
+  `extract_sequences_to_file()` supports partitioned writes, and
+  `extract_sequences()` / `extract_sequences_dnastringset()` accept
+  list-valued `seq_idx` and return partition-aligned results.
+- Add `renumber = c("none", "zero_based", "one_based")` to
+  `extract_sequences()` and `extract_sequences_to_file()`, and align
+  empty-request behavior across in-memory outputs and partitioned files.
+- Improve extraction performance and robustness: major sparse-extraction
+  speedups, chunked memory behavior for `extract_sequences()` and
+  `extract_sequences_dnastringset()`, region-merge tuning via
+  `fastqindexr.max_bridge_gap` / `fastqindexr.max_region_records`,
+  and fixes for some FastqIndEx `.fqi` reads and repeated small
+  extractions with reused indexes.
 
 ## 0.0.2
 

@@ -3,7 +3,7 @@
 \name{create_index}
 \alias{create_index}
 \alias{print.fastqindexr_index}
-\title{Build an in-memory index for gzipped FASTA or FASTQ}
+\title{Build an in-memory index for FASTA or FASTQ}
 \usage{
 create_index(
   files,
@@ -14,9 +14,8 @@ create_index(
 \method{print}{fastqindexr_index}(x, ...)
 }
 \arguments{
-\item{files}{Character vector of paths to existing
-\strong{gzip-compressed} (\code{.gz})
-FASTA or FASTQ files. Paths are normalized to absolute paths.}
+\item{files}{Character vector of paths to existing FASTA or FASTQ files
+(gzip-compressed or plain). Paths are normalized to absolute paths.}
 
 \item{type}{Format of the records: \code{"auto"} (infer from the first non-empty
 line of the first file: \code{>} for FASTA, \code{@} for FASTQ), \code{"fasta"}, or
@@ -44,13 +43,15 @@ time.}
 \item{index_payload}{Serialized internal index payload used to restore
 native state after serialization/deserialization.}
 \item{record_size}{Lines per record (2 for FASTA, 4 for FASTQ).}
+\item{file_compression}{Per-file \code{"gzip"} or \code{"plain"}.}
 }
 }
 \description{
-Scans one or more gzipped files and builds a random-access style index. When
-multiple files are given, they are treated as one logical concatenated
-stream: record IDs follow file order (first file first, then the next, and
-so on).
+Scans one or more files and builds a random-access style index. Gzip inputs
+use block-style indexing; uncompressed inputs use byte offsets for record
+starts. When multiple files are given, they are treated as one logical
+concatenated stream: record IDs follow file order (first file first, then
+the next, and so on).
 }
 \section{FASTA limitation}{
 
