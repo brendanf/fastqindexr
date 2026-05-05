@@ -15,7 +15,8 @@ create_index(
 }
 \arguments{
 \item{files}{Character vector of paths to existing FASTA or FASTQ files
-(gzip-compressed or plain). Paths are normalized to absolute paths.}
+(gzip-compressed or plain). Paths are normalized to absolute paths. A single
+call must use one compression type only (all gzip or all plain).}
 
 \item{type}{Format of the records: \code{"auto"} (infer from the first non-empty
 line of the first file: \code{>} for FASTA, \code{@} for FASTQ), \code{"fasta"}, or
@@ -28,8 +29,9 @@ line of the first file: \code{>} for FASTA, \code{@} for FASTQ), \code{"fasta"},
 \item{...}{Ignored.}
 }
 \value{
-An object of class \code{fastqindexr_index} (a list with additional
-attributes). Useful components include:
+A \code{fastqindexr_index} object (list-based), with subclass
+\code{fastqindexr_gzip_index} or \code{fastqindexr_plain_index}. Useful components
+include:
 \describe{
 \item{format}{\code{"fasta"} or \code{"fastq"}.}
 \item{files}{Character vector of indexed paths.}

@@ -118,7 +118,8 @@ resolve_type_for_files <- function(type, files) {
 #'   file (`>` for FASTA, `@` for FASTQ). If detection fails for all files, a
 #'   warning is issued and `"fastq"` is used.
 #'
-#' @return A `fastqindexr_index` object.
+#' @return A `fastqindexr_index` object with subclass
+#'   `fastqindexr_gzip_index`.
 #'
 #' @export
 read_fqi_index <- function(
@@ -149,6 +150,5 @@ read_fqi_index <- function(
   cache$index_ptr <- index$index_ptr
   index$index_ptr <- NULL
   index$._cache <- cache
-  class(index) <- c("fastqindexr_index", class(index))
-  index
+  assign_index_classes(index, default_subclass = "fastqindexr_gzip_index")
 }

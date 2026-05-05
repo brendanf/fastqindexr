@@ -19,7 +19,8 @@ file (\code{>} for FASTA, \code{@} for FASTQ). If detection fails for all files,
 warning is issued and \code{"fastq"} is used.}
 }
 \value{
-A \code{fastqindexr_index} object.
+A \code{fastqindexr_index} object with subclass
+\code{fastqindexr_gzip_index}.
 }
 \description{
 Reads one or more \code{.fqi} index files produced by the FastqIndEx CLI and

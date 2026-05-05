@@ -44,18 +44,46 @@ struct ParsedRecord {
   std::string qual;
 };
 
-struct IndexedFile {
-  fastqindex_core::FileIndex index;
+enum class CompressionKind {
+  Gzip = 0,
+  Plain = 1
+};
+
+struct IndexedFileBase {
   std::uint64_t record_count{0};
-  bool plain{false};
+  virtual ~IndexedFileBase() = default;
+  virtual CompressionKind kind() const = 0;
+  virtual std::unique_ptr<IndexedFileBase> clone() const = 0;
+};
+
+struct GzipIndexedFile : public IndexedFileBase {
+  fastqindex_core::FileIndex index;
+
+  CompressionKind kind() const override {
+    return CompressionKind::Gzip;
+  }
+  std::unique_ptr<IndexedFileBase> clone() const override {
+    return std::unique_ptr<IndexedFileBase>(new GzipIndexedFile(*this));
+  }
+};
+
+struct PlainIndexedFile : public IndexedFileBase {
   std::vector<std::uint64_t> plain_header_byte_offsets;
+
+  CompressionKind kind() const override {
+    return CompressionKind::Plain;
+  }
+  std::unique_ptr<IndexedFileBase> clone() const override {
+    return std::unique_ptr<IndexedFileBase>(new PlainIndexedFile(*this));
+  }
 };
 
 struct IndexBundle {
   std::string format;
   int record_size{0};
+  CompressionKind compression_kind{CompressionKind::Gzip};
   std::vector<std::string> files;
-  std::vector<IndexedFile> indexed_files;
+  std::vector<std::unique_ptr<IndexedFileBase>> indexed_files;
   std::vector<std::uint64_t> record_offsets;
   std::uint64_t n_records{0};
 };
@@ -222,8 +250,31 @@ std::uint64_t asUInt64(double value, const std::string& field) {
   return static_cast<std::uint64_t>(value);
 }
 
-Rcpp::List serializeIndexedFile(const IndexedFile& indexed_file) {
-  const auto& entries = indexed_file.index.entries;
+const GzipIndexedFile& asGzipIndexedFile(const IndexedFileBase& indexed_file) {
+  const auto* ptr = dynamic_cast<const GzipIndexedFile*>(&indexed_file);
+  if (ptr == nullptr) {
+    throw std::runtime_error("Expected gzip indexed file.");
+  }
+  return *ptr;
+}
+
+const PlainIndexedFile& asPlainIndexedFile(const IndexedFileBase& indexed_file) {
+  const auto* ptr = dynamic_cast<const PlainIndexedFile*>(&indexed_file);
+  if (ptr == nullptr) {
+    throw std::runtime_error("Expected plain indexed file.");
+  }
+  return *ptr;
+}
+
+bool isPlainIndexedFile(const IndexedFileBase& indexed_file) {
+  return indexed_file.kind() == CompressionKind::Plain;
+}
+
+Rcpp::List serializeIndexedFile(const IndexedFileBase& indexed_file) {
+  const bool plain = isPlainIndexedFile(indexed_file);
+  const auto* gzip = plain ? nullptr : &asGzipIndexedFile(indexed_file);
+  const auto* plain_file = plain ? &asPlainIndexedFile(indexed_file) : nullptr;
+  const auto& entries = plain ? std::vector<fastqindex_core::IndexEntry>() : gzip->index.entries;
   const R_xlen_t n = static_cast<R_xlen_t>(entries.size());
 
   Rcpp::NumericVector block_index(n);
@@ -256,9 +307,11 @@ Rcpp::List serializeIndexedFile(const IndexedFile& indexed_file) {
     );
   }
 
-  Rcpp::NumericVector plain_off(static_cast<R_xlen_t>(indexed_file.plain_header_byte_offsets.size()));
+  Rcpp::NumericVector plain_off(
+    plain_file == nullptr ? 0 : static_cast<R_xlen_t>(plain_file->plain_header_byte_offsets.size())
+  );
   for (R_xlen_t i = 0; i < plain_off.size(); ++i) {
-    plain_off[i] = static_cast<double>(indexed_file.plain_header_byte_offsets[static_cast<size_t>(i)]);
+    plain_off[i] = static_cast<double>(plain_file->plain_header_byte_offsets[static_cast<size_t>(i)]);
   }
 
   return Rcpp::List::create(
@@ -269,9 +322,10 @@ Rcpp::List serializeIndexedFile(const IndexedFile& indexed_file) {
     Rcpp::Named("compressed_dictionary_size") = compressed_dictionary_size,
     Rcpp::Named("bits") = bits,
     Rcpp::Named("dictionary_blob") = dictionary_blob,
-    Rcpp::Named("total_lines") = static_cast<double>(indexed_file.index.total_lines),
+    Rcpp::Named("total_lines") = plain ? 0.0 :
+      static_cast<double>(gzip->index.total_lines),
     Rcpp::Named("record_count") = static_cast<double>(indexed_file.record_count),
-    Rcpp::Named("plain") = indexed_file.plain,
+    Rcpp::Named("plain") = plain,
     Rcpp::Named("plain_header_byte_offsets") = plain_off
   );
 }
@@ -279,7 +333,7 @@ Rcpp::List serializeIndexedFile(const IndexedFile& indexed_file) {
 Rcpp::List serializeIndexBundle(const IndexBundle& bundle) {
   Rcpp::List indexed_files(bundle.indexed_files.size());
   for (R_xlen_t i = 0; i < indexed_files.size(); ++i) {
-    indexed_files[i] = serializeIndexedFile(bundle.indexed_files[static_cast<size_t>(i)]);
+    indexed_files[i] = serializeIndexedFile(*bundle.indexed_files[static_cast<size_t>(i)]);
   }
 
   Rcpp::NumericVector record_offsets(bundle.record_offsets.size());
@@ -287,11 +341,12 @@ Rcpp::List serializeIndexBundle(const IndexBundle& bundle) {
     record_offsets[i] = static_cast<double>(bundle.record_offsets[static_cast<size_t>(i)]);
   }
 
-  const int schema_out = 3;
+  const int schema_out = 4;
   return Rcpp::List::create(
     Rcpp::Named("schema_version") = schema_out,
     Rcpp::Named("format") = bundle.format,
     Rcpp::Named("record_size") = bundle.record_size,
+    Rcpp::Named("bundle_compression") = (bundle.compression_kind == CompressionKind::Gzip) ? "gzip" : "plain",
     Rcpp::Named("files") = bundle.files,
     Rcpp::Named("record_offsets") = record_offsets,
     Rcpp::Named("n_records") = static_cast<double>(bundle.n_records),
@@ -299,7 +354,12 @@ Rcpp::List serializeIndexBundle(const IndexBundle& bundle) {
   );
 }
 
-IndexedFile deserializeIndexedFile(const Rcpp::List& payload, int schema_version) {
+std::unique_ptr<IndexedFileBase> deserializeIndexedFile(
+  const Rcpp::List& payload,
+  int schema_version,
+  CompressionKind bundle_kind,
+  int record_size
+) {
   Rcpp::NumericVector block_index = payload["block_index"];
   Rcpp::NumericVector block_offset = payload["block_offset_in_raw_file"];
   Rcpp::NumericVector starting_line = payload["starting_line_in_entry"];
@@ -322,53 +382,76 @@ IndexedFile deserializeIndexedFile(const Rcpp::List& payload, int schema_version
     throw std::runtime_error("Malformed dictionary blob in serialized payload.");
   }
 
-  IndexedFile indexed_file;
-  indexed_file.index.entries.reserve(static_cast<size_t>(n));
-  for (R_xlen_t i = 0; i < n; ++i) {
-    fastqindex_core::IndexEntry entry;
-    entry.block_index = asUInt64(block_index[i], "block_index");
-    entry.block_offset_in_raw_file = asUInt64(block_offset[i], "block_offset_in_raw_file");
-    entry.starting_line_in_entry = asUInt64(starting_line[i], "starting_line_in_entry");
-    entry.offset_to_next_line_start = static_cast<std::uint32_t>(asUInt64(offset_next_line[i], "offset_to_next_line_start"));
-    entry.bits = static_cast<unsigned char>(bits[i]);
-    entry.compressed_dictionary_size = (compressed_dictionary_size.size() == 0) ?
-      0 :
-      static_cast<std::uint16_t>(compressed_dictionary_size[i]);
-
-    const size_t dictionary_offset = static_cast<size_t>(i) * fastqindex_core::WINDOW_SIZE;
-    entry.dictionary.resize(fastqindex_core::WINDOW_SIZE);
-    std::copy(
-      dictionary_blob.begin() + static_cast<R_xlen_t>(dictionary_offset),
-      dictionary_blob.begin() + static_cast<R_xlen_t>(dictionary_offset + fastqindex_core::WINDOW_SIZE),
-      entry.dictionary.begin()
-    );
-    indexed_file.index.entries.push_back(std::move(entry));
+  const bool payload_plain = payload.containsElementNamed("plain") && Rcpp::as<bool>(payload["plain"]);
+  if (
+    (bundle_kind == CompressionKind::Gzip && payload_plain) ||
+      (bundle_kind == CompressionKind::Plain && !payload_plain)
+  ) {
+    throw std::runtime_error("Malformed payload: indexed file compression differs from bundle compression.");
   }
+  if (bundle_kind == CompressionKind::Gzip) {
+    std::unique_ptr<GzipIndexedFile> indexed_file(new GzipIndexedFile());
+    indexed_file->index.entries.reserve(static_cast<size_t>(n));
+    for (R_xlen_t i = 0; i < n; ++i) {
+      fastqindex_core::IndexEntry entry;
+      entry.block_index = asUInt64(block_index[i], "block_index");
+      entry.block_offset_in_raw_file = asUInt64(block_offset[i], "block_offset_in_raw_file");
+      entry.starting_line_in_entry = asUInt64(starting_line[i], "starting_line_in_entry");
+      entry.offset_to_next_line_start = static_cast<std::uint32_t>(asUInt64(offset_next_line[i], "offset_to_next_line_start"));
+      entry.bits = static_cast<unsigned char>(bits[i]);
+      entry.compressed_dictionary_size = (compressed_dictionary_size.size() == 0) ?
+        0 :
+        static_cast<std::uint16_t>(compressed_dictionary_size[i]);
 
-  indexed_file.index.total_lines = asUInt64(Rcpp::as<double>(payload["total_lines"]), "total_lines");
-  indexed_file.record_count = asUInt64(Rcpp::as<double>(payload["record_count"]), "record_count");
-  if (payload.containsElementNamed("plain")) {
-    indexed_file.plain = Rcpp::as<bool>(payload["plain"]);
-  }
-  if (indexed_file.plain && payload.containsElementNamed("plain_header_byte_offsets")) {
-    Rcpp::NumericVector po = payload["plain_header_byte_offsets"];
-    indexed_file.plain_header_byte_offsets.reserve(static_cast<size_t>(po.size()));
-    for (R_xlen_t i = 0; i < po.size(); ++i) {
-      indexed_file.plain_header_byte_offsets.push_back(asUInt64(po[i], "plain_header_byte_offsets"));
+      const size_t dictionary_offset = static_cast<size_t>(i) * fastqindex_core::WINDOW_SIZE;
+      entry.dictionary.resize(fastqindex_core::WINDOW_SIZE);
+      std::copy(
+        dictionary_blob.begin() + static_cast<R_xlen_t>(dictionary_offset),
+        dictionary_blob.begin() + static_cast<R_xlen_t>(dictionary_offset + fastqindex_core::WINDOW_SIZE),
+        entry.dictionary.begin()
+      );
+      indexed_file->index.entries.push_back(std::move(entry));
     }
+    indexed_file->index.total_lines = asUInt64(Rcpp::as<double>(payload["total_lines"]), "total_lines");
+    indexed_file->record_count = asUInt64(Rcpp::as<double>(payload["record_count"]), "record_count");
+    return indexed_file;
+  }
+
+  std::unique_ptr<PlainIndexedFile> indexed_file(new PlainIndexedFile());
+  if (!payload.containsElementNamed("plain_header_byte_offsets")) {
+    throw std::runtime_error("Malformed payload: plain indexed file missing plain_header_byte_offsets.");
+  }
+  Rcpp::NumericVector po = payload["plain_header_byte_offsets"];
+  indexed_file->plain_header_byte_offsets.reserve(static_cast<size_t>(po.size()));
+  for (R_xlen_t i = 0; i < po.size(); ++i) {
+    indexed_file->plain_header_byte_offsets.push_back(asUInt64(po[i], "plain_header_byte_offsets"));
+  }
+  indexed_file->record_count = asUInt64(Rcpp::as<double>(payload["record_count"]), "record_count");
+  if (static_cast<int>(indexed_file->plain_header_byte_offsets.size()) != static_cast<int>(indexed_file->record_count)) {
+    throw std::runtime_error("Malformed payload: plain_header_byte_offsets length must equal record_count.");
   }
   return indexed_file;
 }
 
 IndexBundle deserializeIndexBundle(const Rcpp::List& payload) {
   const int schema_version = Rcpp::as<int>(payload["schema_version"]);
-  if (schema_version != 1 && schema_version != 2 && schema_version != 3) {
-    throw std::runtime_error("Unsupported serialized index schema version.");
+  if (schema_version != 4) {
+    throw std::runtime_error(
+      "Unsupported serialized index schema version. This refactor requires rebuilding indexes."
+    );
   }
 
   IndexBundle bundle;
   bundle.format = Rcpp::as<std::string>(payload["format"]);
   bundle.record_size = Rcpp::as<int>(payload["record_size"]);
+  std::string bundle_compression = Rcpp::as<std::string>(payload["bundle_compression"]);
+  if (bundle_compression == "gzip") {
+    bundle.compression_kind = CompressionKind::Gzip;
+  } else if (bundle_compression == "plain") {
+    bundle.compression_kind = CompressionKind::Plain;
+  } else {
+    throw std::runtime_error("Malformed payload: unsupported bundle_compression.");
+  }
   bundle.n_records = asUInt64(Rcpp::as<double>(payload["n_records"]), "n_records");
   bundle.files = Rcpp::as<std::vector<std::string>>(payload["files"]);
 
@@ -384,7 +467,9 @@ IndexBundle deserializeIndexBundle(const Rcpp::List& payload) {
   }
   bundle.indexed_files.reserve(static_cast<size_t>(indexed_files.size()));
   for (R_xlen_t i = 0; i < indexed_files.size(); ++i) {
-    bundle.indexed_files.push_back(deserializeIndexedFile(indexed_files[i], schema_version));
+    bundle.indexed_files.push_back(
+      deserializeIndexedFile(indexed_files[i], schema_version, bundle.compression_kind, bundle.record_size)
+    );
   }
 
   return bundle;
@@ -494,7 +579,7 @@ Rcpp::DataFrame fileInfoDataFrame(const Rcpp::CharacterVector& files) {
   );
 }
 
-IndexedFile readSingleFqi(const std::string& fqi_file) {
+std::unique_ptr<GzipIndexedFile> readSingleFqi(const std::string& fqi_file) {
   auto source = fastqindex_core::FileSource::from(std::filesystem::path(fqi_file));
   fastqindex_core::IndexReader reader(source);
   std::vector<std::shared_ptr<fastqindex_core::IndexEntry>> upstream_entries =
@@ -505,12 +590,12 @@ IndexedFile readSingleFqi(const std::string& fqi_file) {
     throw std::runtime_error("Failed to parse .fqi index: " + fqi_file + suffix);
   }
 
-  IndexedFile indexed_file;
-  indexed_file.index.entries.reserve(upstream_entries.size());
+  std::unique_ptr<GzipIndexedFile> indexed_file(new GzipIndexedFile());
+  indexed_file->index.entries.reserve(upstream_entries.size());
   for (const auto& upstream_entry : upstream_entries) {
-    indexed_file.index.entries.push_back(*upstream_entry);
+    indexed_file->index.entries.push_back(*upstream_entry);
   }
-  indexed_file.index.total_lines = static_cast<std::uint64_t>(
+  indexed_file->index.total_lines = static_cast<std::uint64_t>(
     reader.getIndexHeader().linesInIndexedFile
   );
   return indexed_file;
@@ -1137,9 +1222,8 @@ ParsedRecord readPlainRecordAtOffset(
   return readOneRecordFromPlainStream(&in, type, include_qual);
 }
 
-IndexedFile buildPlainFileIndex(const std::string& path, int record_size) {
-  IndexedFile out;
-  out.plain = true;
+std::unique_ptr<PlainIndexedFile> buildPlainFileIndex(const std::string& path, int record_size) {
+  std::unique_ptr<PlainIndexedFile> out(new PlainIndexedFile());
   std::ifstream in(path, std::ios::binary);
   if (!in.good()) {
     throw std::runtime_error("Could not open plain input for indexing: " + path);
@@ -1155,19 +1239,18 @@ IndexedFile buildPlainFileIndex(const std::string& path, int record_size) {
       if (line_start < 0) {
         throw std::runtime_error("Could not track byte position in plain file: " + path);
       }
-      out.plain_header_byte_offsets.push_back(static_cast<std::uint64_t>(line_start));
+      out->plain_header_byte_offsets.push_back(static_cast<std::uint64_t>(line_start));
     }
     if (!line.empty() && line.back() == '\r') {
       line.pop_back();
     }
     line_index++;
   }
-  out.index.total_lines = line_index;
-  if (out.index.total_lines % static_cast<std::uint64_t>(record_size) != 0) {
+  if (line_index % static_cast<std::uint64_t>(record_size) != 0) {
     throw std::runtime_error("Plain file line count is not a multiple of record size for: " + path);
   }
-  out.record_count = out.index.total_lines / static_cast<std::uint64_t>(record_size);
-  if (out.plain_header_byte_offsets.size() != out.record_count) {
+  out->record_count = line_index / static_cast<std::uint64_t>(record_size);
+  if (out->plain_header_byte_offsets.size() != out->record_count) {
     throw std::runtime_error("Plain index header offset count mismatch for: " + path);
   }
   return out;
@@ -1239,8 +1322,8 @@ SelectedRecordMap collectRequestedRecords(
       );
       continue;
     }
-    if (bundle.indexed_files[file_idx].plain && mode == ExtractExecutionMode::Indexed) {
-      const auto& offs = bundle.indexed_files[file_idx].plain_header_byte_offsets;
+    if (isPlainIndexedFile(*bundle.indexed_files[file_idx]) && mode == ExtractExecutionMode::Indexed) {
+      const auto& offs = asPlainIndexedFile(*bundle.indexed_files[file_idx]).plain_header_byte_offsets;
       for (auto lid : local_ids) {
         if (lid >= offs.size()) {
           throw std::runtime_error("Requested id out of range for plain indexed file.");
@@ -1300,7 +1383,7 @@ SelectedRecordMap collectRequestedRecords(
           std::uint64_t extracted_records = 0;
           extractor.extractRecords(
             Rcpp::as<std::string>(files[file_idx]),
-            bundle.indexed_files[file_idx].index.entries,
+            asGzipIndexedFile(*bundle.indexed_files[file_idx]).index.entries,
             line_start,
             line_count,
             bundle.record_size,
@@ -1340,7 +1423,7 @@ SelectedRecordMap collectRequestedRecords(
           std::uint64_t selected_records = 0;
           extractor.extractSelectedRecords(
             Rcpp::as<std::string>(files[file_idx]),
-            bundle.indexed_files[file_idx].index.entries,
+            asGzipIndexedFile(*bundle.indexed_files[file_idx]).index.entries,
             line_start,
             line_count,
             bundle.record_size,
@@ -1581,8 +1664,8 @@ double streamSortedUniqueToFile(
       );
       continue;
     }
-    if (bundle.indexed_files[file_idx].plain && mode == ExtractExecutionMode::Indexed) {
-      const auto& offs = bundle.indexed_files[file_idx].plain_header_byte_offsets;
+    if (isPlainIndexedFile(*bundle.indexed_files[file_idx]) && mode == ExtractExecutionMode::Indexed) {
+      const auto& offs = asPlainIndexedFile(*bundle.indexed_files[file_idx]).plain_header_byte_offsets;
       for (auto lid : local_ids) {
         if (lid >= offs.size()) {
           throw std::runtime_error("Requested id out of range for plain indexed file.");
@@ -1643,7 +1726,7 @@ double streamSortedUniqueToFile(
           std::uint64_t extracted_records = 0;
           extractor.extractRecords(
             Rcpp::as<std::string>(files[file_idx]),
-            bundle.indexed_files[file_idx].index.entries,
+            asGzipIndexedFile(*bundle.indexed_files[file_idx]).index.entries,
             line_start,
             line_count,
             bundle.record_size,
@@ -1684,7 +1767,7 @@ double streamSortedUniqueToFile(
           std::uint64_t selected_records = 0;
           extractor.extractSelectedRecords(
             Rcpp::as<std::string>(files[file_idx]),
-            bundle.indexed_files[file_idx].index.entries,
+            asGzipIndexedFile(*bundle.indexed_files[file_idx]).index.entries,
             line_start,
             line_count,
             bundle.record_size,
@@ -1975,8 +2058,8 @@ SEXP buildDNAStringSetFromRequested(
         }
         continue;
       }
-      if (bundle.indexed_files[file_idx].plain && mode == ExtractExecutionMode::Indexed) {
-        const auto& offs = bundle.indexed_files[file_idx].plain_header_byte_offsets;
+      if (isPlainIndexedFile(*bundle.indexed_files[file_idx]) && mode == ExtractExecutionMode::Indexed) {
+        const auto& offs = asPlainIndexedFile(*bundle.indexed_files[file_idx]).plain_header_byte_offsets;
         for (auto lid : local_ids) {
           if (lid >= offs.size()) {
             throw std::runtime_error("Requested id out of range for plain indexed file.");
@@ -2046,7 +2129,7 @@ SEXP buildDNAStringSetFromRequested(
             std::uint64_t extracted_records = 0;
             extractor.extractRecords(
               Rcpp::as<std::string>(files[file_idx]),
-              bundle.indexed_files[file_idx].index.entries,
+              asGzipIndexedFile(*bundle.indexed_files[file_idx]).index.entries,
               line_start,
               line_count,
               bundle.record_size,
@@ -2094,7 +2177,7 @@ SEXP buildDNAStringSetFromRequested(
             std::uint64_t selected_records = 0;
             extractor.extractSelectedRecords(
               Rcpp::as<std::string>(files[file_idx]),
-              bundle.indexed_files[file_idx].index.entries,
+              asGzipIndexedFile(*bundle.indexed_files[file_idx]).index.entries,
               line_start,
               line_count,
               bundle.record_size,
@@ -2317,27 +2400,34 @@ Rcpp::List cpp_create_index(Rcpp::CharacterVector files, std::string type) {
   bundle.record_size = record_size;
   bundle.files = paths;
   bundle.record_offsets.push_back(0);
+  const bool first_is_gzip = fileHasGzipMagic(paths.front());
+  bundle.compression_kind = first_is_gzip ? CompressionKind::Gzip : CompressionKind::Plain;
 
   Rcpp::NumericVector per_file_counts(paths.size());
   Rcpp::CharacterVector file_compression(static_cast<R_xlen_t>(paths.size()));
   for (size_t i = 0; i < paths.size(); ++i) {
-    IndexedFile idxf;
-    if (fileHasGzipMagic(paths[i])) {
-      idxf.index = indexer.createIndex(paths[i]);
-      idxf.plain = false;
-      if (idxf.index.total_lines % static_cast<std::uint64_t>(record_size) != 0) {
+    const bool is_gzip = fileHasGzipMagic(paths[i]);
+    if (is_gzip != first_is_gzip) {
+      throw std::runtime_error("Mixed gzip/plain inputs are not supported in a single index.");
+    }
+    std::unique_ptr<IndexedFileBase> idxf;
+    if (is_gzip) {
+      std::unique_ptr<GzipIndexedFile> gzip_idx(new GzipIndexedFile());
+      gzip_idx->index = indexer.createIndex(paths[i]);
+      if (gzip_idx->index.total_lines % static_cast<std::uint64_t>(record_size) != 0) {
         throw std::runtime_error("Indexed line count is not a multiple of record size for: " + paths[i]);
       }
-      idxf.record_count = idxf.index.total_lines / static_cast<std::uint64_t>(record_size);
+      gzip_idx->record_count = gzip_idx->index.total_lines / static_cast<std::uint64_t>(record_size);
+      idxf = std::move(gzip_idx);
       file_compression[static_cast<R_xlen_t>(i)] = "gzip";
     } else {
       idxf = buildPlainFileIndex(paths[i], record_size);
       file_compression[static_cast<R_xlen_t>(i)] = "plain";
     }
     bundle.indexed_files.push_back(std::move(idxf));
-    bundle.n_records += bundle.indexed_files.back().record_count;
+    bundle.n_records += bundle.indexed_files.back()->record_count;
     bundle.record_offsets.push_back(bundle.n_records);
-    per_file_counts[i] = static_cast<double>(bundle.indexed_files.back().record_count);
+    per_file_counts[i] = static_cast<double>(bundle.indexed_files.back()->record_count);
   }
 
   Rcpp::XPtr<IndexBundle> index_ptr(new IndexBundle(std::move(bundle)), true);
@@ -2391,26 +2481,27 @@ Rcpp::List cpp_read_fqi_index(
   IndexBundle bundle;
   bundle.format = type;
   bundle.record_size = record_size;
+  bundle.compression_kind = CompressionKind::Gzip;
   bundle.files = data_paths;
   bundle.record_offsets.push_back(0);
 
   Rcpp::NumericVector per_file_counts(data_paths.size());
   for (size_t i = 0; i < fqi_paths.size(); ++i) {
-    IndexedFile idxf = readSingleFqi(fqi_paths[i]);
-    if (idxf.index.total_lines == 0 && std::filesystem::exists(data_paths[i])) {
-      idxf.index.total_lines = countGzLines(data_paths[i]);
+    std::unique_ptr<GzipIndexedFile> idxf = readSingleFqi(fqi_paths[i]);
+    if (idxf->index.total_lines == 0 && std::filesystem::exists(data_paths[i])) {
+      idxf->index.total_lines = countGzLines(data_paths[i]);
     }
-    if (idxf.index.total_lines > 0 &&
-        idxf.index.total_lines % static_cast<std::uint64_t>(record_size) != 0) {
+    if (idxf->index.total_lines > 0 &&
+        idxf->index.total_lines % static_cast<std::uint64_t>(record_size) != 0) {
       throw std::runtime_error(
         "Indexed line count is not a multiple of record size for: " + fqi_paths[i]
       );
     }
-    idxf.record_count = idxf.index.total_lines / static_cast<std::uint64_t>(record_size);
+    idxf->record_count = idxf->index.total_lines / static_cast<std::uint64_t>(record_size);
     bundle.indexed_files.push_back(std::move(idxf));
-    bundle.n_records += bundle.indexed_files.back().record_count;
+    bundle.n_records += bundle.indexed_files.back()->record_count;
     bundle.record_offsets.push_back(bundle.n_records);
-    per_file_counts[i] = static_cast<double>(bundle.indexed_files.back().record_count);
+    per_file_counts[i] = static_cast<double>(bundle.indexed_files.back()->record_count);
   }
 
   Rcpp::XPtr<IndexBundle> index_ptr(new IndexBundle(std::move(bundle)), true);

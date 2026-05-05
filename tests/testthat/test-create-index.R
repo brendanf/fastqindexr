@@ -4,6 +4,7 @@ test_that("create_index builds FASTA index for single file", {
 
   idx <- create_index(path, type = "fasta")
   expect_s3_class(idx, "fastqindexr_index")
+  expect_s3_class(idx, "fastqindexr_gzip_index")
   expect_identical(idx$format, "fasta")
   expect_equal(idx$n_records, 4)
   expect_length(idx$files, 1)
@@ -38,6 +39,8 @@ test_that("create_index indexes plain FASTA and extract_sequences matches gzip",
 
   idx_plain <- create_index(plain, type = "fasta")
   idx_gz <- create_index(gz, type = "fasta")
+  expect_s3_class(idx_plain, "fastqindexr_plain_index")
+  expect_s3_class(idx_gz, "fastqindexr_gzip_index")
   expect_identical(idx_plain$file_compression, "plain")
   expect_identical(idx_gz$file_compression, "gzip")
 
@@ -45,4 +48,17 @@ test_that("create_index indexes plain FASTA and extract_sequences matches gzip",
   out_plain <- extract_sequences(idx_plain, ids, mode = "indexed")
   out_gz <- extract_sequences(idx_gz, ids, mode = "indexed")
   expect_equal(out_plain, out_gz)
+})
+
+test_that("create_index rejects mixed gzip and plain inputs", {
+  plain <- tempfile(fileext = ".fa")
+  gz <- tempfile(fileext = ".fa.gz")
+  on.exit(unlink(c(plain, gz)), add = TRUE)
+  writeLines(c(">seq1", "AAAA", ">seq2", "CCCC"), plain)
+  write_gz_lines(gz, c(">seq3", "GGGG", ">seq4", "TTTT"))
+
+  expect_error(
+    create_index(c(gz, plain), type = "fasta"),
+    "Mixed gzip/plain inputs"
+  )
 })

@@ -9,6 +9,7 @@ test_that("read_fqi_index reads fixture with explicit files", {
   idx <- read_fqi_index(fqi_path = fqi, files = fq, type = "fastq")
 
   expect_s3_class(idx, "fastqindexr_index")
+  expect_s3_class(idx, "fastqindexr_gzip_index")
   expect_identical(idx$format, "fastq")
   expect_equal(idx$n_records, 4)
   expect_equal(unname(idx$file_record_offsets), c(0, 4))
@@ -32,6 +33,7 @@ test_that("read_fqi_index warns when deduced source file is missing", {
     "Deduced source file"
   )
   expect_s3_class(idx, "fastqindexr_index")
+  expect_s3_class(idx, "fastqindexr_gzip_index")
 })
 
 test_that("read_fqi_index warns when auto type cannot be inferred", {
@@ -47,6 +49,7 @@ test_that("read_fqi_index warns when auto type cannot be inferred", {
     expect_warning("Could not determine type from file") |>
     expect_warning("defaulting")
   expect_s3_class(idx, "fastqindexr_index")
+  expect_s3_class(idx, "fastqindexr_gzip_index")
   expect_identical(idx$format, "fastq")
 })
 

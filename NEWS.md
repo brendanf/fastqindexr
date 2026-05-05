@@ -11,9 +11,11 @@
   from serialized index metadata after `saveRDS()` / `readRDS()`.
 - Extend index creation and indexed extraction to uncompressed FASTA/FASTQ
   alongside gzip inputs.
-- Extend index metadata/payload with per-file compression and plain-file
-  byte offsets (`schema_version` v3), while preserving back-compat reads
-  of earlier payload versions.
+- Refactor index internals into gzip/plain subtype hierarchies and require
+  homogeneous compression in each index (mixed gzip/plain inputs now error).
+- Replace serialized payload schema with the new typed format
+  (`schema_version` v4); older serialized payloads are no longer restored
+  and must be rebuilt.
 - Add `partition_seq_idx()` and extend partition-aware extraction:
   `extract_sequences_to_file()` supports partitioned writes, and
   `extract_sequences()` / `extract_sequences_dnastringset()` accept

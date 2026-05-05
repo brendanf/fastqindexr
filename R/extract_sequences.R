@@ -18,6 +18,37 @@ validate_index <- function(index) {
       call. = FALSE
     )
   }
+  compression <- as.character(index$file_compression)
+  compression <- unique(compression[!is.na(compression) & nzchar(compression)])
+  if (
+    length(compression) != 1L || !(compression[[1L]] %in% c("gzip", "plain"))
+  ) {
+    stop(
+      paste0(
+        "Malformed index object. `file_compression` must be one homogeneous ",
+        "value in {\"gzip\", \"plain\"}."
+      ),
+      call. = FALSE
+    )
+  }
+  if (
+    inherits(index, "fastqindexr_gzip_index") &&
+      !identical(compression[[1L]], "gzip")
+  ) {
+    stop(
+      "Malformed index object. gzip subclass requires gzip compression.",
+      call. = FALSE
+    )
+  }
+  if (
+    inherits(index, "fastqindexr_plain_index") &&
+      !identical(compression[[1L]], "plain")
+  ) {
+    stop(
+      "Malformed index object. plain subclass requires plain compression.",
+      call. = FALSE
+    )
+  }
   index
 }
 

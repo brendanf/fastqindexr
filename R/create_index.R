@@ -15,6 +15,42 @@ validate_input_files <- function(files) {
   normalizePath(files, mustWork = TRUE)
 }
 
+#' @noRd
+assign_index_classes <- function(index, default_subclass = NULL) {
+  if (is.null(index$file_compression)) {
+    compression <- character()
+  } else {
+    compression <- as.character(index$file_compression)
+  }
+  compression <- unique(compression)
+  compression <- compression[!is.na(compression) & nzchar(compression)]
+
+  subclass <- default_subclass
+  if (length(compression) > 0L) {
+    if (length(compression) != 1L) {
+      stop(
+        "Index payload contains mixed file compression values; use homogeneous inputs.",
+        call. = FALSE
+      )
+    }
+    subclass <- switch(
+      compression[[1L]],
+      gzip = "fastqindexr_gzip_index",
+      plain = "fastqindexr_plain_index",
+      NULL
+    )
+  }
+  if (is.null(subclass)) {
+    stop(
+      "Could not determine index subclass from `file_compression`.",
+      call. = FALSE
+    )
+  }
+
+  class(index) <- c(subclass, "fastqindexr_index", "list")
+  index
+}
+
 #' Build an in-memory index for FASTA or FASTQ
 #'
 #' Scans one or more files and builds a random-access style index. Gzip inputs
@@ -24,14 +60,16 @@ validate_input_files <- function(files) {
 #' the next, and so on).
 #'
 #' @param files Character vector of paths to existing FASTA or FASTQ files
-#'   (gzip-compressed or plain). Paths are normalized to absolute paths.
+#'   (gzip-compressed or plain). Paths are normalized to absolute paths. A single
+#'   call must use one compression type only (all gzip or all plain).
 #' @param type Format of the records: `"auto"` (infer from the first non-empty
 #'   line of the first file: `>` for FASTA, `@` for FASTQ), `"fasta"`, or
 #'   `"fastq"`.
 #' @param index_stride_bytes Reserved for future use; currently ignored.
 #'
-#' @return An object of class `fastqindexr_index` (a list with additional
-#'   attributes). Useful components include:
+#' @return A `fastqindexr_index` object (list-based), with subclass
+#'   `fastqindexr_gzip_index` or `fastqindexr_plain_index`. Useful components
+#'   include:
 #' \describe{
 #'   \item{format}{`"fasta"` or `"fastq"`.}
 #'   \item{files}{Character vector of indexed paths.}
@@ -88,8 +126,7 @@ create_index <- function(
   cache$index_ptr <- index$index_ptr
   index$index_ptr <- NULL
   index$._cache <- cache
-  class(index) <- c("fastqindexr_index", class(index))
-  index
+  assign_index_classes(index)
 }
 
 #' @rdname create_index
