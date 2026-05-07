@@ -1,5 +1,5 @@
 # fastqindexr benchmark snapshot: extract_sequences_chunk_benchmark
-# git: 49ea40872a44d2396586361c4986a1d048c565fd
+# git: 638acca0c3881e75c91c1ac3ab846754043c0c28
 # R: R version 4.4.3 (2025-02-28)
 ---
 
@@ -10,463 +10,463 @@ creating index
 FASTA: extract_sequences chunked backend benchmark
 case: ordered_unique/default
     return: data.frame
-    elapsed_s: 5.396
+    elapsed_s: 2.618
     n_ids: 300000
 case: ordered_unique/default
     return: seq
-    elapsed_s: 4.810
+    elapsed_s: 2.070
     n_ids: 300000
 
 [benchmark]
 FASTA: execution-mode baseline comparison
 case: mode_compare_perm10 mode=indexed
     return: data.frame
-    elapsed_s: 0.022
+    elapsed_s: 0.006
     n_ids: 10
 case: mode_compare_perm10 mode=sequential
     return: data.frame
-    elapsed_s: 3.596
+    elapsed_s: 3.665
     n_ids: 10
 case: mode_compare_perm1000 mode=indexed
     return: data.frame
-    elapsed_s: 1.770
+    elapsed_s: 0.353
     n_ids: 1000
 case: mode_compare_perm1000 mode=sequential
     return: data.frame
-    elapsed_s: 3.598
+    elapsed_s: 3.680
     n_ids: 1000
 
 [benchmark]
 FASTA: region-merge matrix (bridge x max_region_records)
 case: matrix_perm1M mode=sequential
     return: data.frame
-    elapsed_s: 9.207
+    elapsed_s: 9.265
     n_ids: 1000000
 case: matrix_perm1M mode=indexed b=64 r=200000
     return: data.frame
-    elapsed_s: 17.982
+    elapsed_s: 8.430
     n_ids: 1000000
 case: matrix_perm1M mode=indexed b=256 r=200000
     return: data.frame
-    elapsed_s: 17.610
+    elapsed_s: 7.751
     n_ids: 1000000
 case: matrix_perm1M mode=indexed b=1024 r=200000
     return: data.frame
-    elapsed_s: 17.855
+    elapsed_s: 8.021
     n_ids: 1000000
 case: matrix_perm1M mode=indexed b=4096 r=200000
     return: data.frame
-    elapsed_s: 17.554
+    elapsed_s: 7.969
     n_ids: 1000000
 case: matrix_perm1M mode=indexed b=16384 r=200000
     return: data.frame
-    elapsed_s: 17.543
+    elapsed_s: 7.934
     n_ids: 1000000
 case: matrix_perm1M mode=indexed b=65536 r=200000
     return: data.frame
-    elapsed_s: 18.015
+    elapsed_s: 8.367
     n_ids: 1000000
 case: matrix_perm1M mode=indexed b=64 r=2000000
     return: data.frame
-    elapsed_s: 17.609
+    elapsed_s: 8.033
     n_ids: 1000000
 case: matrix_perm1M mode=indexed b=256 r=2000000
     return: data.frame
-    elapsed_s: 17.564
+    elapsed_s: 7.847
     n_ids: 1000000
 case: matrix_perm1M mode=indexed b=1024 r=2000000
     return: data.frame
-    elapsed_s: 17.529
+    elapsed_s: 7.905
     n_ids: 1000000
 case: matrix_perm1M mode=indexed b=4096 r=2000000
     return: data.frame
-    elapsed_s: 17.544
+    elapsed_s: 7.799
     n_ids: 1000000
 case: matrix_perm1M mode=indexed b=16384 r=2000000
     return: data.frame
-    elapsed_s: 17.968
+    elapsed_s: 8.397
     n_ids: 1000000
 case: matrix_perm1M mode=indexed b=65536 r=2000000
     return: data.frame
-    elapsed_s: 17.681
+    elapsed_s: 8.012
     n_ids: 1000000
 case: matrix_perm100k mode=sequential
     return: data.frame
-    elapsed_s: 3.992
+    elapsed_s: 4.086
     n_ids: 100000
 case: matrix_perm100k mode=indexed b=64 r=200000
     return: data.frame
-    elapsed_s: 4.130
+    elapsed_s: 2.783
     n_ids: 100000
 case: matrix_perm100k mode=indexed b=256 r=200000
     return: data.frame
-    elapsed_s: 3.846
+    elapsed_s: 2.786
     n_ids: 100000
 case: matrix_perm100k mode=indexed b=1024 r=200000
     return: data.frame
-    elapsed_s: 3.853
+    elapsed_s: 2.836
     n_ids: 100000
 case: matrix_perm100k mode=indexed b=4096 r=200000
     return: data.frame
-    elapsed_s: 3.868
+    elapsed_s: 2.800
     n_ids: 100000
 case: matrix_perm100k mode=indexed b=16384 r=200000
     return: data.frame
-    elapsed_s: 3.857
+    elapsed_s: 2.793
     n_ids: 100000
 case: matrix_perm100k mode=indexed b=65536 r=200000
     return: data.frame
-    elapsed_s: 3.870
+    elapsed_s: 2.811
     n_ids: 100000
 case: matrix_perm100k mode=indexed b=64 r=2000000
     return: data.frame
-    elapsed_s: 4.062
+    elapsed_s: 2.769
     n_ids: 100000
 case: matrix_perm100k mode=indexed b=256 r=2000000
     return: data.frame
-    elapsed_s: 3.845
+    elapsed_s: 2.821
     n_ids: 100000
 case: matrix_perm100k mode=indexed b=1024 r=2000000
     return: data.frame
-    elapsed_s: 3.848
+    elapsed_s: 2.824
     n_ids: 100000
 case: matrix_perm100k mode=indexed b=4096 r=2000000
     return: data.frame
-    elapsed_s: 3.843
+    elapsed_s: 2.816
     n_ids: 100000
 case: matrix_perm100k mode=indexed b=16384 r=2000000
     return: data.frame
-    elapsed_s: 3.846
+    elapsed_s: 2.819
     n_ids: 100000
 case: matrix_perm100k mode=indexed b=65536 r=2000000
     return: data.frame
-    elapsed_s: 3.838
+    elapsed_s: 2.810
     n_ids: 100000
 case: matrix_perm10k mode=sequential
     return: data.frame
-    elapsed_s: 3.636
+    elapsed_s: 3.703
     n_ids: 10000
 case: matrix_perm10k mode=indexed b=64 r=200000
     return: data.frame
-    elapsed_s: 10.367
+    elapsed_s: 2.260
     n_ids: 10000
 case: matrix_perm10k mode=indexed b=256 r=200000
     return: data.frame
-    elapsed_s: 3.323
+    elapsed_s: 1.893
     n_ids: 10000
 case: matrix_perm10k mode=indexed b=1024 r=200000
     return: data.frame
-    elapsed_s: 2.570
+    elapsed_s: 2.224
     n_ids: 10000
 case: matrix_perm10k mode=indexed b=4096 r=200000
     return: data.frame
-    elapsed_s: 2.567
+    elapsed_s: 2.226
     n_ids: 10000
 case: matrix_perm10k mode=indexed b=16384 r=200000
     return: data.frame
-    elapsed_s: 2.566
+    elapsed_s: 2.215
     n_ids: 10000
 case: matrix_perm10k mode=indexed b=65536 r=200000
     return: data.frame
-    elapsed_s: 2.556
+    elapsed_s: 2.217
     n_ids: 10000
 case: matrix_perm10k mode=indexed b=64 r=2000000
     return: data.frame
-    elapsed_s: 10.335
+    elapsed_s: 2.270
     n_ids: 10000
 case: matrix_perm10k mode=indexed b=256 r=2000000
     return: data.frame
-    elapsed_s: 3.331
+    elapsed_s: 1.894
     n_ids: 10000
 case: matrix_perm10k mode=indexed b=1024 r=2000000
     return: data.frame
-    elapsed_s: 2.564
+    elapsed_s: 2.235
     n_ids: 10000
 case: matrix_perm10k mode=indexed b=4096 r=2000000
     return: data.frame
-    elapsed_s: 2.563
+    elapsed_s: 2.230
     n_ids: 10000
 case: matrix_perm10k mode=indexed b=16384 r=2000000
     return: data.frame
-    elapsed_s: 2.567
+    elapsed_s: 2.227
     n_ids: 10000
 case: matrix_perm10k mode=indexed b=65536 r=2000000
     return: data.frame
-    elapsed_s: 2.562
+    elapsed_s: 2.225
     n_ids: 10000
 case: matrix_perm1k mode=sequential
     return: data.frame
-    elapsed_s: 3.604
+    elapsed_s: 3.695
     n_ids: 1000
 case: matrix_perm1k mode=indexed b=64 r=200000
     return: data.frame
-    elapsed_s: 1.817
+    elapsed_s: 0.360
     n_ids: 1000
 case: matrix_perm1k mode=indexed b=256 r=200000
     return: data.frame
-    elapsed_s: 1.556
+    elapsed_s: 0.352
     n_ids: 1000
 case: matrix_perm1k mode=indexed b=1024 r=200000
     return: data.frame
-    elapsed_s: 1.387
+    elapsed_s: 0.742
     n_ids: 1000
 case: matrix_perm1k mode=indexed b=4096 r=200000
     return: data.frame
-    elapsed_s: 2.325
+    elapsed_s: 2.038
     n_ids: 1000
 case: matrix_perm1k mode=indexed b=16384 r=200000
     return: data.frame
-    elapsed_s: 2.443
+    elapsed_s: 2.144
     n_ids: 1000
 case: matrix_perm1k mode=indexed b=65536 r=200000
     return: data.frame
-    elapsed_s: 2.456
+    elapsed_s: 2.143
     n_ids: 1000
 case: matrix_perm1k mode=indexed b=64 r=2000000
     return: data.frame
-    elapsed_s: 1.832
+    elapsed_s: 0.360
     n_ids: 1000
 case: matrix_perm1k mode=indexed b=256 r=2000000
     return: data.frame
-    elapsed_s: 1.555
+    elapsed_s: 0.352
     n_ids: 1000
 case: matrix_perm1k mode=indexed b=1024 r=2000000
     return: data.frame
-    elapsed_s: 1.390
+    elapsed_s: 0.742
     n_ids: 1000
 case: matrix_perm1k mode=indexed b=4096 r=2000000
     return: data.frame
-    elapsed_s: 2.323
+    elapsed_s: 2.036
     n_ids: 1000
 case: matrix_perm1k mode=indexed b=16384 r=2000000
     return: data.frame
-    elapsed_s: 2.454
+    elapsed_s: 2.171
     n_ids: 1000
 case: matrix_perm1k mode=indexed b=65536 r=2000000
     return: data.frame
-    elapsed_s: 2.511
+    elapsed_s: 2.188
     n_ids: 1000
 case: matrix_perm100 mode=sequential
     return: data.frame
-    elapsed_s: 3.595
+    elapsed_s: 3.682
     n_ids: 100
 case: matrix_perm100 mode=indexed b=64 r=200000
     return: data.frame
-    elapsed_s: 0.200
+    elapsed_s: 0.041
     n_ids: 100
 case: matrix_perm100 mode=indexed b=256 r=200000
     return: data.frame
-    elapsed_s: 0.201
+    elapsed_s: 0.039
     n_ids: 100
 case: matrix_perm100 mode=indexed b=1024 r=200000
     return: data.frame
-    elapsed_s: 0.194
+    elapsed_s: 0.048
     n_ids: 100
 case: matrix_perm100 mode=indexed b=4096 r=200000
     return: data.frame
-    elapsed_s: 0.259
+    elapsed_s: 0.138
     n_ids: 100
 case: matrix_perm100 mode=indexed b=16384 r=200000
     return: data.frame
-    elapsed_s: 1.129
+    elapsed_s: 0.983
     n_ids: 100
 case: matrix_perm100 mode=indexed b=65536 r=200000
     return: data.frame
-    elapsed_s: 2.132
+    elapsed_s: 1.887
     n_ids: 100
 case: matrix_perm100 mode=indexed b=64 r=2000000
     return: data.frame
-    elapsed_s: 0.200
+    elapsed_s: 0.039
     n_ids: 100
 case: matrix_perm100 mode=indexed b=256 r=2000000
     return: data.frame
-    elapsed_s: 0.199
+    elapsed_s: 0.040
     n_ids: 100
 case: matrix_perm100 mode=indexed b=1024 r=2000000
     return: data.frame
-    elapsed_s: 0.196
+    elapsed_s: 0.047
     n_ids: 100
 case: matrix_perm100 mode=indexed b=4096 r=2000000
     return: data.frame
-    elapsed_s: 0.261
+    elapsed_s: 0.138
     n_ids: 100
 case: matrix_perm100 mode=indexed b=16384 r=2000000
     return: data.frame
-    elapsed_s: 1.136
+    elapsed_s: 0.981
     n_ids: 100
 case: matrix_perm100 mode=indexed b=65536 r=2000000
     return: data.frame
-    elapsed_s: 2.314
+    elapsed_s: 1.971
     n_ids: 100
 case: matrix_perm10 mode=sequential
     return: data.frame
-    elapsed_s: 3.693
+    elapsed_s: 3.683
     n_ids: 10
 case: matrix_perm10 mode=indexed b=64 r=200000
     return: data.frame
-    elapsed_s: 0.020
+    elapsed_s: 0.004
     n_ids: 10
 case: matrix_perm10 mode=indexed b=256 r=200000
     return: data.frame
-    elapsed_s: 0.021
+    elapsed_s: 0.005
     n_ids: 10
 case: matrix_perm10 mode=indexed b=1024 r=200000
     return: data.frame
-    elapsed_s: 0.020
+    elapsed_s: 0.005
     n_ids: 10
 case: matrix_perm10 mode=indexed b=4096 r=200000
     return: data.frame
-    elapsed_s: 0.023
+    elapsed_s: 0.010
     n_ids: 10
 case: matrix_perm10 mode=indexed b=16384 r=200000
     return: data.frame
-    elapsed_s: 0.025
+    elapsed_s: 0.009
     n_ids: 10
 case: matrix_perm10 mode=indexed b=65536 r=200000
     return: data.frame
-    elapsed_s: 0.419
+    elapsed_s: 0.372
     n_ids: 10
 case: matrix_perm10 mode=indexed b=64 r=2000000
     return: data.frame
-    elapsed_s: 0.020
+    elapsed_s: 0.005
     n_ids: 10
 case: matrix_perm10 mode=indexed b=256 r=2000000
     return: data.frame
-    elapsed_s: 0.020
+    elapsed_s: 0.006
     n_ids: 10
 case: matrix_perm10 mode=indexed b=1024 r=2000000
     return: data.frame
-    elapsed_s: 0.020
+    elapsed_s: 0.005
     n_ids: 10
 case: matrix_perm10 mode=indexed b=4096 r=2000000
     return: data.frame
-    elapsed_s: 0.023
+    elapsed_s: 0.010
     n_ids: 10
 case: matrix_perm10 mode=indexed b=16384 r=2000000
     return: data.frame
-    elapsed_s: 0.023
+    elapsed_s: 0.011
     n_ids: 10
 case: matrix_perm10 mode=indexed b=65536 r=2000000
     return: data.frame
-    elapsed_s: 0.422
+    elapsed_s: 0.372
     n_ids: 10
 case: random_with_replacement/default
     return: data.frame
-    elapsed_s: 6.146
+    elapsed_s: 3.830
     n_ids: 300000
 case: random_with_replacement/default
     return: seq
-    elapsed_s: 6.088
+    elapsed_s: 3.802
     n_ids: 300000
 case: permuted_unique/default
     return: data.frame
-    elapsed_s: 6.699
+    elapsed_s: 4.057
     n_ids: 300000
 case: permuted_unique/default
     return: seq
-    elapsed_s: 6.651
+    elapsed_s: 4.005
     n_ids: 300000
 
 [benchmark]
 FASTA plain: mode comparison
 case: plain_mode_compare_perm1000 mode=indexed
     return: data.frame
-    elapsed_s: 0.009
+    elapsed_s: 0.012
     n_ids: 1000
 case: plain_mode_compare_perm1000 mode=sequential
     return: data.frame
-    elapsed_s: 1.561
+    elapsed_s: 1.700
     n_ids: 1000
 
 [benchmark]
 FASTQ: extract_sequences chunked backend benchmark
 case: fastq/ordered_unique/default
     return: data.frame
-    elapsed_s: 9.837
+    elapsed_s: 9.743
     n_ids: 300000
 case: fastq/ordered_unique/default
     return: seq
-    elapsed_s: 9.034
+    elapsed_s: 9.097
     n_ids: 300000
 
 [benchmark]
 FASTQ: execution-mode baseline comparison
 case: fastq/mode_compare_perm10 mode=indexed
     return: data.frame
-    elapsed_s: 0.033
+    elapsed_s: 0.019
     n_ids: 10
 case: fastq/mode_compare_perm10 mode=sequential
     return: data.frame
-    elapsed_s: 8.820
+    elapsed_s: 8.646
     n_ids: 10
 case: fastq/mode_compare_perm1000 mode=indexed
     return: data.frame
-    elapsed_s: 1.550
+    elapsed_s: 1.558
     n_ids: 1000
 case: fastq/mode_compare_perm1000 mode=sequential
     return: data.frame
-    elapsed_s: 8.879
+    elapsed_s: 8.635
     n_ids: 1000
 
 [benchmark]
 FASTQ: region-merge matrix
 case: fastq/matrix_perm10k mode=sequential
     return: data.frame
-    elapsed_s: 9.052
+    elapsed_s: 8.694
     n_ids: 10000
 case: fastq/matrix_perm10k mode=indexed b=64 r=200000
     return: data.frame
-    elapsed_s: 9.439
+    elapsed_s: 9.427
     n_ids: 10000
 case: fastq/matrix_perm10k mode=indexed b=256 r=200000
     return: data.frame
-    elapsed_s: 5.807
+    elapsed_s: 5.672
     n_ids: 10000
 case: fastq/matrix_perm10k mode=indexed b=1024 r=200000
     return: data.frame
-    elapsed_s: 6.395
+    elapsed_s: 6.030
     n_ids: 10000
 case: fastq/matrix_perm10k mode=indexed b=4096 r=200000
     return: data.frame
-    elapsed_s: 6.189
+    elapsed_s: 6.052
     n_ids: 10000
 case: fastq/matrix_perm10k mode=indexed b=16384 r=200000
     return: data.frame
-    elapsed_s: 6.189
+    elapsed_s: 6.043
     n_ids: 10000
 case: fastq/matrix_perm10k mode=indexed b=65536 r=200000
     return: data.frame
-    elapsed_s: 6.179
+    elapsed_s: 6.044
     n_ids: 10000
 case: fastq/matrix_perm10k mode=indexed b=64 r=2000000
     return: data.frame
-    elapsed_s: 9.401
+    elapsed_s: 9.419
     n_ids: 10000
 case: fastq/matrix_perm10k mode=indexed b=256 r=2000000
     return: data.frame
-    elapsed_s: 5.760
+    elapsed_s: 5.672
     n_ids: 10000
 case: fastq/matrix_perm10k mode=indexed b=1024 r=2000000
     return: data.frame
-    elapsed_s: 6.171
+    elapsed_s: 6.029
     n_ids: 10000
 case: fastq/matrix_perm10k mode=indexed b=4096 r=2000000
     return: data.frame
-    elapsed_s: 6.199
+    elapsed_s: 6.043
     n_ids: 10000
 case: fastq/matrix_perm10k mode=indexed b=16384 r=2000000
     return: data.frame
-    elapsed_s: 6.202
+    elapsed_s: 6.044
     n_ids: 10000
 case: fastq/matrix_perm10k mode=indexed b=65536 r=2000000
     return: data.frame
-    elapsed_s: 6.201
+    elapsed_s: 6.040
     n_ids: 10000
 case: fastq/random_with_replacement/default
     return: data.frame
-    elapsed_s: 12.968
+    elapsed_s: 12.716
     n_ids: 300000
 case: fastq/random_with_replacement/default
     return: seq
-    elapsed_s: 12.440
+    elapsed_s: 12.375
     n_ids: 300000

@@ -5,8 +5,12 @@
 #   Rscript tests/benchmarks/extract_to_file_vs_list_benchmark.R
 # If the pkgload package is available, the script loads the in-tree build via
 # load_all(); otherwise use a recent `install` of `fastqindexr`.
-if (file.exists("DESCRIPTION") && file.exists("R") && file.exists("src") &&
-    requireNamespace("pkgload", quietly = TRUE)) {
+if (
+  file.exists("DESCRIPTION") &&
+    file.exists("R") &&
+    file.exists("src") &&
+    requireNamespace("pkgload", quietly = TRUE)
+) {
   pkgload::load_all(quiet = TRUE)
 } else {
   suppressPackageStartupMessages(library(fastqindexr))

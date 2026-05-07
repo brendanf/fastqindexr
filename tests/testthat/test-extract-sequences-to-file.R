@@ -32,6 +32,56 @@ test_that("extract_sequences_to_file writes FASTQ and supports gzip output", {
   )
 })
 
+test_that("extract_sequences_to_file handles multi-line FASTA collapse option", {
+  in_plain <- tempfile(fileext = ".fa")
+  out_keep <- tempfile(fileext = ".fa")
+  out_collapse <- tempfile(fileext = ".fa")
+  on.exit(unlink(c(in_plain, out_keep, out_collapse)), add = TRUE)
+  writeLines(c(">x1", "AA", "AA", ">x2", "CC", "CC"), in_plain)
+  idx <- create_index(in_plain, type = "fasta")
+
+  extract_sequences_to_file(
+    idx,
+    c(1, 2),
+    outfile = out_keep,
+    collapse_sequence_lines = FALSE
+  )
+  extract_sequences_to_file(
+    idx,
+    c(1, 2),
+    outfile = out_collapse,
+    collapse_sequence_lines = TRUE
+  )
+
+  expect_equal(
+    readLines(out_keep, warn = FALSE),
+    c(">x1", "AA", "AA", ">x2", "CC", "CC")
+  )
+  expect_equal(
+    readLines(out_collapse, warn = FALSE),
+    c(">x1", "AAAA", ">x2", "CCCC")
+  )
+})
+
+test_that("extract_sequences_to_file ignores collapse flag for FASTQ output", {
+  in_path <- tempfile(fileext = ".fq.gz")
+  out_a <- tempfile(fileext = ".fq")
+  out_b <- tempfile(fileext = ".fq")
+  on.exit(unlink(c(in_path, out_a, out_b)), add = TRUE)
+  make_fastq_gz(in_path)
+  idx <- create_index(in_path, type = "fastq")
+
+  extract_sequences_to_file(idx, c(1, 2), outfile = out_a, type = "fastq")
+  extract_sequences_to_file(
+    idx,
+    c(1, 2),
+    outfile = out_b,
+    type = "fastq",
+    collapse_sequence_lines = TRUE
+  )
+  expect_equal(readLines(out_a, warn = FALSE), readLines(out_b, warn = FALSE))
+})
+
 test_that("extract_sequences_to_file supports append and overwrite", {
   in_path <- tempfile(fileext = ".fa.gz")
   out_path <- tempfile(fileext = ".fa")

@@ -82,12 +82,10 @@ assign_index_classes <- function(index, default_subclass = NULL) {
 #'     time.}
 #'   \item{index_payload}{Serialized internal index payload used to restore
 #'     native state after serialization/deserialization.}
-#'   \item{record_size}{Lines per record (2 for FASTA, 4 for FASTQ).}
+#'   \item{record_size}{Internal extraction stride (2 for FASTA, 4 for FASTQ;
+#'     FASTA logical records are header-driven and may span multiple lines).}
 #'   \item{file_compression}{Per-file `"gzip"` or `"plain"`.}
 #' }
-#'
-#' @section FASTA limitation:
-#' Extraction assumes **one sequence line per record** (header + sequence line).
 #'
 #' @seealso [extract_sequences()] to retrieve sequences by 1-based record ID.
 #'

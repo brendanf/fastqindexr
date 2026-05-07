@@ -664,11 +664,12 @@ extract_sequences <- function(
 #'   implementation may buffer all unique records like [extract_sequences()].
 #' @param compress Logical; if `TRUE`, write gzip-compressed output directly via
 #'   zlib. Defaults to `endsWith(tolower(outfile), ".gz")`.
+#' @param collapse_sequence_lines Logical scalar. For FASTA output only: when
+#'   `FALSE` (default), wrapped sequence lines from input FASTA are preserved in
+#'   extracted sequence text; when `TRUE`, wrapped lines are concatenated into a
+#'   single line per record.
 #'
 #' @return Invisibly returns `outfile`.
-#'
-#' @section FASTA limitation:
-#' Each record must consist of a header line plus **one** sequence line.
 #'
 #' @seealso [extract_sequences()], [create_index()]
 #'
@@ -681,6 +682,7 @@ extract_sequences_to_file <- function(
   type = c("auto", "fasta", "fastq"),
   append = FALSE,
   compress = endsWith(tolower(outfile), ".gz"),
+  collapse_sequence_lines = FALSE,
   mode = c("auto", "indexed", "sequential"),
   input_type = c("auto", "fasta", "fastq"),
   renumber = c("none", "zero_based", "one_based")
@@ -704,6 +706,13 @@ extract_sequences_to_file <- function(
   }
   if (!is.character(outfile) || length(outfile) < 1L || any(!nzchar(outfile))) {
     stop("`outfile` must be a non-empty character vector.", call. = FALSE)
+  }
+  if (
+    !is.logical(collapse_sequence_lines) ||
+      length(collapse_sequence_lines) != 1L ||
+      is.na(collapse_sequence_lines)
+  ) {
+    stop("`collapse_sequence_lines` must be TRUE or FALSE.", call. = FALSE)
   }
   is_partition_mode <- is.list(seq_idx) || length(outfile) > 1L
 
@@ -930,6 +939,9 @@ extract_sequences_to_file <- function(
         if (resolved_type == "fastq") {
           paste0("@", seq_id, "\n", seq, "\n+\n", qual, "\n")
         } else {
+          if (isTRUE(collapse_sequence_lines)) {
+            seq <- gsub("\n", "", seq, fixed = TRUE)
+          }
           paste0(">", seq_id, "\n", seq, "\n")
         }
       }
@@ -988,6 +1000,7 @@ extract_sequences_to_file <- function(
           outfile = outfile[i],
           append = append,
           compress = compress_vec[i],
+          collapse_sequence_lines = collapse_sequence_lines,
           diagnostics = tuning$diagnostics
         )
       } else {
@@ -1001,6 +1014,7 @@ extract_sequences_to_file <- function(
           outfile = outfile[i],
           append = append,
           compress = compress_vec[i],
+          collapse_sequence_lines = collapse_sequence_lines,
           max_bridge_gap = tuning$max_bridge_gap,
           max_region_records = tuning$max_region_records,
           extract_mode = tuning$extract_mode,
@@ -1037,6 +1051,7 @@ extract_sequences_to_file <- function(
       outfile = outfile,
       append = append,
       compress = compress,
+      collapse_sequence_lines = collapse_sequence_lines,
       diagnostics = tuning$diagnostics
     )
   } else {
@@ -1050,6 +1065,7 @@ extract_sequences_to_file <- function(
       outfile = outfile,
       append = append,
       compress = compress,
+      collapse_sequence_lines = collapse_sequence_lines,
       max_bridge_gap = tuning$max_bridge_gap,
       max_region_records = tuning$max_region_records,
       extract_mode = tuning$extract_mode,

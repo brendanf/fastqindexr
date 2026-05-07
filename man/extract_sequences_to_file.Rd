@@ -12,6 +12,7 @@ extract_sequences_to_file(
   type = c("auto", "fasta", "fastq"),
   append = FALSE,
   compress = endsWith(tolower(outfile), ".gz"),
+  collapse_sequence_lines = FALSE,
   mode = c("auto", "indexed", "sequential"),
   input_type = c("auto", "fasta", "fastq"),
   renumber = c("none", "zero_based", "one_based")
@@ -46,6 +47,11 @@ implementation may buffer all unique records like \code{\link[=extract_sequences
 
 \item{compress}{Logical; if \code{TRUE}, write gzip-compressed output directly via
 zlib. Defaults to \code{endsWith(tolower(outfile), ".gz")}.}
+
+\item{collapse_sequence_lines}{Logical scalar. For FASTA output only: when
+\code{FALSE} (default), wrapped sequence lines from input FASTA are preserved in
+extracted sequence text; when \code{TRUE}, wrapped lines are concatenated into a
+single line per record.}
 }
 \value{
 Invisibly returns \code{outfile}.
@@ -55,11 +61,6 @@ Writes records in \strong{the same order as \code{seq_idx}}, including duplicate
 IDs are \strong{1-based} record indices in the logical concatenated stream defined
 when the index was built (see \code{\link[=create_index]{create_index()}}).
 }
-\section{FASTA limitation}{
-
-Each record must consist of a header line plus \strong{one} sequence line.
-}
-
 \seealso{
 \code{\link[=extract_sequences]{extract_sequences()}}, \code{\link[=create_index]{create_index()}}
 }

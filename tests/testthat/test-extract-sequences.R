@@ -23,6 +23,52 @@ test_that("plain indexed extraction preserves order and duplicates", {
   expect_equal(out$seq, c("GGGG", "AAAA", "GGGG", "CCCC"))
 })
 
+test_that("extract_sequences supports multi-line FASTA for plain and gzip", {
+  lines <- c(
+    ">seq1",
+    "AA",
+    "AA",
+    ">seq2",
+    "CC",
+    ">seq3",
+    "GG",
+    "GG",
+    "GG"
+  )
+  p_plain <- tempfile(fileext = ".fa")
+  p_gz <- tempfile(fileext = ".fa.gz")
+  on.exit(unlink(c(p_plain, p_gz)), add = TRUE)
+  writeLines(lines, p_plain)
+  write_gz_lines(p_gz, lines)
+
+  idx_plain <- create_index(p_plain, type = "fasta")
+  idx_gz <- create_index(p_gz, type = "fasta")
+
+  out_plain <- extract_sequences(idx_plain, c(3, 1))
+  out_gz <- extract_sequences(idx_gz, c(3, 1))
+
+  expect_equal(out_plain$seq_id, c("seq3", "seq1"))
+  expect_equal(out_gz$seq_id, c("seq3", "seq1"))
+  expect_equal(out_plain$seq, c("GG\nGG\nGG", "AA\nAA"))
+  expect_equal(out_gz$seq, c("GG\nGG\nGG", "AA\nAA"))
+})
+
+test_that("extract_sequences_dnastringset handles large ordered gzip FASTA ids", {
+  path <- tempfile(fileext = ".fa.gz")
+  on.exit(unlink(path), add = TRUE)
+  make_benchmark_fasta(path, n = 120000L, width = 80L)
+  idx <- create_index(path, type = "fasta")
+  ids <- seq_len(100000L)
+  out <- extract_sequences_dnastringset(
+    idx,
+    ids,
+    renumber = "none",
+    chunk_chars = 1e6
+  )
+  expect_equal(length(out), length(ids))
+  expect_match(names(out)[[1]], "^seq0*1$")
+})
+
 test_that("extract_sequences returns quality for FASTQ", {
   path <- tempfile(fileext = ".fq.gz")
   make_fastq_gz(path)

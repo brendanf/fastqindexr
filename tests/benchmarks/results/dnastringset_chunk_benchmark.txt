@@ -1,5 +1,5 @@
 # fastqindexr benchmark snapshot: dnastringset_chunk_benchmark
-# git: 49ea40872a44d2396586361c4986a1d048c565fd
+# git: 638acca0c3881e75c91c1ac3ab846754043c0c28
 # R: R version 4.4.3 (2025-02-28)
 ---
 
@@ -8,11 +8,11 @@
 FASTA/single file ordered
 records: 1000000
 method: chunked
-elapsed_s: 5.500
+elapsed_s: 5.205
 mem_delta_mb: 172.6
 n_records_out: 1000000
 method: tempfile
-elapsed_s: 5.014
+elapsed_s: 4.653
 mem_delta_mb: 96.0
 n_records_out: 1000000
 
@@ -20,11 +20,11 @@ n_records_out: 1000000
 FASTA/single file random with duplicates
 records: 1000000
 method: chunked
-elapsed_s: 4.997
+elapsed_s: 5.444
 mem_delta_mb: 142.1
 n_records_out: 1000000
 method: tempfile
-elapsed_s: 5.384
+elapsed_s: 5.877
 mem_delta_mb: 95.5
 n_records_out: 1000000
 
@@ -32,48 +32,48 @@ n_records_out: 1000000
 FASTA/multi-file boundary crossing
 records: 64
 method: chunked
-elapsed_s: 0.528
+elapsed_s: 0.558
 mem_delta_mb: 0.0
 n_records_out: 64
 method: tempfile
-elapsed_s: 0.501
-mem_delta_mb: 0.0
+elapsed_s: 0.506
+mem_delta_mb: 0.1
 n_records_out: 64
 
 [benchmark]
 FASTA/chunk-size sensitivity
 chunk size=1e+06 chars n=1000000
-elapsed=3.991s
+elapsed=3.606s
 chunk size=5e+06 chars n=1000000
-elapsed=4.311s
+elapsed=3.973s
 chunk size=1e+07 chars n=1000000
-elapsed=4.144s
+elapsed=3.779s
 chunk size=5e+07 chars n=1000000
-elapsed=4.276s
+elapsed=3.893s
 chunk size=1e+08 chars n=1000000
-elapsed=4.698s
+elapsed=4.315s
 
 [benchmark]
 FASTQ/single file ordered
 records: 1000000
 method: chunked
-elapsed_s: 7.183
+elapsed_s: 7.143
 mem_delta_mb: 95.3
 n_records_out: 1000000
 method: tempfile
-elapsed_s: 6.791
-mem_delta_mb: 95.5
+elapsed_s: 6.815
+mem_delta_mb: 95.4
 n_records_out: 1000000
 
 [benchmark]
 FASTQ/single file random with duplicates
 records: 1000000
 method: chunked
-elapsed_s: 6.647
-mem_delta_mb: 103.2
+elapsed_s: 6.743
+mem_delta_mb: 103.1
 n_records_out: 1000000
 method: tempfile
-elapsed_s: 6.735
+elapsed_s: 6.832
 mem_delta_mb: 95.3
 n_records_out: 1000000
 
@@ -81,10 +81,10 @@ n_records_out: 1000000
 FASTQ/multi-file boundary crossing
 records: 64
 method: chunked
-elapsed_s: 0.584
+elapsed_s: 0.588
 mem_delta_mb: 0.0
 n_records_out: 64
 method: tempfile
-elapsed_s: 0.582
-mem_delta_mb: 0.1
+elapsed_s: 0.650
+mem_delta_mb: 0.0
 n_records_out: 64

@@ -1,5 +1,5 @@
 # fastqindexr benchmark snapshot: sorted_id_extract_benchmark
-# git: 49ea40872a44d2396586361c4986a1d048c565fd
+# git: 638acca0c3881e75c91c1ac3ab846754043c0c28
 # R: R version 4.4.3 (2025-02-28)
 ---
 
@@ -7,11 +7,11 @@
 [benchmark]
 FASTA: build index
 case: fasta/index
-elapsed_s: 0.037
+elapsed_s: 0.046
 case: fasta/random_unsorted_dup
-elapsed_s: 0.016
+elapsed_s: 0.017
 case: fasta/sorted_unique_dense
-elapsed_s: 0.066
+elapsed_s: 0.068
 case: fasta/sorted_unique_sparse
 elapsed_s: 0.017
 rows_random: 2000
@@ -21,11 +21,11 @@ rows_sparse: 2000
 [benchmark]
 FASTQ: build index
 case: fastq/index
-elapsed_s: 0.079
+elapsed_s: 0.080
 case: fastq/random_unsorted_dup
 elapsed_s: 0.029
 case: fastq/sorted_unique_dense
-elapsed_s: 0.031
+elapsed_s: 0.030
 case: fastq/sorted_unique_sparse
 elapsed_s: 0.030
 rows_random: 2000

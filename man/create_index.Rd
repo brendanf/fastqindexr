@@ -44,7 +44,8 @@ boundaries.}
 time.}
 \item{index_payload}{Serialized internal index payload used to restore
 native state after serialization/deserialization.}
-\item{record_size}{Lines per record (2 for FASTA, 4 for FASTQ).}
+\item{record_size}{Internal extraction stride (2 for FASTA, 4 for FASTQ;
+FASTA logical records are header-driven and may span multiple lines).}
 \item{file_compression}{Per-file \code{"gzip"} or \code{"plain"}.}
 }
 }
@@ -55,11 +56,6 @@ starts. When multiple files are given, they are treated as one logical
 concatenated stream: record IDs follow file order (first file first, then
 the next, and so on).
 }
-\section{FASTA limitation}{
-
-Extraction assumes \strong{one sequence line per record} (header + sequence line).
-}
-
 \examples{
 path <- tempfile(fileext = ".fasta.gz")
 con <- gzfile(path, "wt")

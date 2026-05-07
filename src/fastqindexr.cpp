@@ -38,6 +38,9 @@ constexpr bool kFastqindexrTimingEnabled = false;
 
 constexpr int kGzBufferSize = 8192;
 
+bool readGzLine(gzFile stream, std::string& out);
+std::string trimPrefix(const std::string& line, char prefix);
+
 struct ParsedRecord {
   std::string id;
   std::string seq;
@@ -58,6 +61,9 @@ struct IndexedFileBase {
 
 struct GzipIndexedFile : public IndexedFileBase {
   fastqindex_core::FileIndex index;
+  // File-local 0-based line index of each FASTA header. Empty before deserialize
+  // migration means legacy 2-line-per-record layout (headers at lines 0,2,4,...).
+  std::vector<std::uint64_t> fasta_header_line_index;
 
   CompressionKind kind() const override {
     return CompressionKind::Gzip;
@@ -270,6 +276,168 @@ bool isPlainIndexedFile(const IndexedFileBase& indexed_file) {
   return indexed_file.kind() == CompressionKind::Plain;
 }
 
+bool isLegacyTwoLineFastaLayout(
+  const std::vector<std::uint64_t>& header_lines,
+  std::uint64_t total_lines
+) {
+  if (header_lines.empty()) {
+    return false;
+  }
+  if (total_lines != header_lines.size() * 2) {
+    return false;
+  }
+  for (std::size_t i = 0; i < header_lines.size(); ++i) {
+    if (header_lines[i] != static_cast<std::uint64_t>(i) * 2) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::string joinFastaSeqLines(const std::vector<std::string>& seq_lines, bool collapse) {
+  if (seq_lines.empty()) {
+    return "";
+  }
+  if (collapse) {
+    std::string out;
+    for (const auto& s : seq_lines) {
+      out += s;
+    }
+    return out;
+  }
+  std::string out = seq_lines[0];
+  for (size_t i = 1; i < seq_lines.size(); ++i) {
+    out.push_back('\n');
+    out += seq_lines[i];
+  }
+  return out;
+}
+
+void validateFastaHeaderIndices(
+  const std::vector<std::uint64_t>& headers,
+  std::uint64_t total_lines
+) {
+  if (headers.empty()) {
+    throw std::runtime_error("FASTA input has no records (no header lines).");
+  }
+  for (size_t i = 0; i < headers.size(); ++i) {
+    const std::uint64_t block_end =
+      (i + 1 < headers.size()) ? headers[i + 1] : total_lines;
+    if (headers[i] + 1 >= block_end) {
+      throw std::runtime_error("FASTA record has no sequence lines.");
+    }
+  }
+}
+
+std::vector<std::uint64_t> scanGzFastaHeaderLineIndices(const std::string& path) {
+  gzFile stream = gzopen(path.c_str(), "rb");
+  if (stream == nullptr) {
+    throw std::runtime_error("Could not open gzipped FASTA for header scan: " + path);
+  }
+  std::vector<std::uint64_t> headers;
+  std::uint64_t line_no = 0;
+  std::string line;
+  while (readGzLine(stream, line)) {
+    if (!line.empty() && line[0] == '>') {
+      headers.push_back(line_no);
+    }
+    line_no++;
+  }
+  gzclose(stream);
+  validateFastaHeaderIndices(headers, line_no);
+  return headers;
+}
+
+std::uint64_t countPlainFastaRecords(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in.good()) {
+    throw std::runtime_error("Could not open plain FASTA for scan: " + path);
+  }
+  std::uint64_t n_headers = 0;
+  std::string cur;
+  while (std::getline(in, cur)) {
+    if (!cur.empty() && cur.back() == '\r') {
+      cur.pop_back();
+    }
+    if (!cur.empty() && cur[0] == '>') {
+      n_headers++;
+    }
+  }
+  if (n_headers == 0) {
+    throw std::runtime_error("FASTA input has no records (no header lines).");
+  }
+  return n_headers;
+}
+
+std::uint64_t countGzFastaRecords(const std::string& path) {
+  return scanGzFastaHeaderLineIndices(path).size();
+}
+
+void migrateLegacyFastaGzipHeaders(GzipIndexedFile* g) {
+  if (!g->fasta_header_line_index.empty()) {
+    return;
+  }
+  const std::uint64_t nr = g->record_count;
+  g->fasta_header_line_index.reserve(static_cast<size_t>(nr));
+  for (std::uint64_t i = 0; i < nr; ++i) {
+    g->fasta_header_line_index.push_back(i * 2);
+  }
+}
+
+std::uint64_t fastaHeaderLineAt(
+  const GzipIndexedFile& g,
+  std::uint64_t rid
+) {
+  if (g.fasta_header_line_index.empty()) {
+    return rid * 2;
+  }
+  return g.fasta_header_line_index[static_cast<size_t>(rid)];
+}
+
+std::pair<std::uint64_t, std::uint64_t> fastaLogicalRangeToLineSpan(
+  const GzipIndexedFile& g,
+  std::uint64_t total_lines,
+  std::uint64_t n_file_records,
+  std::uint64_t r0,
+  std::uint64_t r1
+) {
+  const std::uint64_t line_start = fastaHeaderLineAt(g, r0);
+  const std::uint64_t line_end =
+    (r1 + 1 < n_file_records) ? fastaHeaderLineAt(g, r1 + 1) - 1 : total_lines - 1;
+  return {line_start, line_end};
+}
+
+void emitFastaLogicalRecordsFromWindowLines(
+  const std::vector<std::string>& window_lines,
+  std::uint64_t window_start_line,
+  const GzipIndexedFile& g,
+  std::uint64_t total_lines,
+  std::uint64_t n_file_records,
+  std::uint64_t r0,
+  std::uint64_t r1,
+  bool collapse_seq,
+  const std::function<void(std::uint64_t, ParsedRecord&&)>& emit
+) {
+  for (std::uint64_t r = r0; r <= r1; ++r) {
+    const std::uint64_t hline = fastaHeaderLineAt(g, r);
+    const std::uint64_t next_h =
+      (r + 1 < n_file_records) ? fastaHeaderLineAt(g, r + 1) : total_lines;
+    const std::size_t i0 = static_cast<std::size_t>(hline - window_start_line);
+    const std::string& htext = window_lines[i0];
+    if (htext.empty() || htext[0] != '>') {
+      throw std::runtime_error("Malformed FASTA header line in extracted window.");
+    }
+    std::vector<std::string> seq_lines;
+    for (std::uint64_t ln = hline + 1; ln < next_h; ++ln) {
+      seq_lines.push_back(window_lines[static_cast<std::size_t>(ln - window_start_line)]);
+    }
+    ParsedRecord pr;
+    pr.id = trimPrefix(htext, '>');
+    pr.seq = joinFastaSeqLines(seq_lines, collapse_seq);
+    emit(r, std::move(pr));
+  }
+}
+
 Rcpp::List serializeIndexedFile(const IndexedFileBase& indexed_file) {
   const bool plain = isPlainIndexedFile(indexed_file);
   const auto* gzip = plain ? nullptr : &asGzipIndexedFile(indexed_file);
@@ -314,6 +482,15 @@ Rcpp::List serializeIndexedFile(const IndexedFileBase& indexed_file) {
     plain_off[i] = static_cast<double>(plain_file->plain_header_byte_offsets[static_cast<size_t>(i)]);
   }
 
+  Rcpp::NumericVector fasta_hdr(
+    plain ? 0 : static_cast<R_xlen_t>(gzip->fasta_header_line_index.size())
+  );
+  if (!plain) {
+    for (R_xlen_t i = 0; i < fasta_hdr.size(); ++i) {
+      fasta_hdr[i] = static_cast<double>(gzip->fasta_header_line_index[static_cast<size_t>(i)]);
+    }
+  }
+
   return Rcpp::List::create(
     Rcpp::Named("block_index") = block_index,
     Rcpp::Named("block_offset_in_raw_file") = block_offset,
@@ -326,7 +503,8 @@ Rcpp::List serializeIndexedFile(const IndexedFileBase& indexed_file) {
       static_cast<double>(gzip->index.total_lines),
     Rcpp::Named("record_count") = static_cast<double>(indexed_file.record_count),
     Rcpp::Named("plain") = plain,
-    Rcpp::Named("plain_header_byte_offsets") = plain_off
+    Rcpp::Named("plain_header_byte_offsets") = plain_off,
+    Rcpp::Named("fasta_header_lines") = fasta_hdr
   );
 }
 
@@ -341,7 +519,7 @@ Rcpp::List serializeIndexBundle(const IndexBundle& bundle) {
     record_offsets[i] = static_cast<double>(bundle.record_offsets[static_cast<size_t>(i)]);
   }
 
-  const int schema_out = 4;
+  const int schema_out = 5;
   return Rcpp::List::create(
     Rcpp::Named("schema_version") = schema_out,
     Rcpp::Named("format") = bundle.format,
@@ -358,7 +536,8 @@ std::unique_ptr<IndexedFileBase> deserializeIndexedFile(
   const Rcpp::List& payload,
   int schema_version,
   CompressionKind bundle_kind,
-  int record_size
+  int record_size,
+  const std::string& bundle_format
 ) {
   Rcpp::NumericVector block_index = payload["block_index"];
   Rcpp::NumericVector block_offset = payload["block_offset_in_raw_file"];
@@ -414,6 +593,23 @@ std::unique_ptr<IndexedFileBase> deserializeIndexedFile(
     }
     indexed_file->index.total_lines = asUInt64(Rcpp::as<double>(payload["total_lines"]), "total_lines");
     indexed_file->record_count = asUInt64(Rcpp::as<double>(payload["record_count"]), "record_count");
+    if (payload.containsElementNamed("fasta_header_lines")) {
+      Rcpp::NumericVector fh = payload["fasta_header_lines"];
+      indexed_file->fasta_header_line_index.reserve(static_cast<size_t>(fh.size()));
+      for (R_xlen_t i = 0; i < fh.size(); ++i) {
+        indexed_file->fasta_header_line_index.push_back(asUInt64(fh[i], "fasta_header_lines"));
+      }
+    }
+    if (
+      bundle_format == "fasta" &&
+      !indexed_file->fasta_header_line_index.empty() &&
+      isLegacyTwoLineFastaLayout(
+        indexed_file->fasta_header_line_index,
+        indexed_file->index.total_lines
+      )
+    ) {
+      indexed_file->fasta_header_line_index.clear();
+    }
     return indexed_file;
   }
 
@@ -435,9 +631,9 @@ std::unique_ptr<IndexedFileBase> deserializeIndexedFile(
 
 IndexBundle deserializeIndexBundle(const Rcpp::List& payload) {
   const int schema_version = Rcpp::as<int>(payload["schema_version"]);
-  if (schema_version != 4) {
+  if (schema_version != 4 && schema_version != 5) {
     throw std::runtime_error(
-      "Unsupported serialized index schema version. This refactor requires rebuilding indexes."
+      "Unsupported serialized index schema version. Rebuild indexes with create_index()."
     );
   }
 
@@ -468,7 +664,13 @@ IndexBundle deserializeIndexBundle(const Rcpp::List& payload) {
   bundle.indexed_files.reserve(static_cast<size_t>(indexed_files.size()));
   for (R_xlen_t i = 0; i < indexed_files.size(); ++i) {
     bundle.indexed_files.push_back(
-      deserializeIndexedFile(indexed_files[i], schema_version, bundle.compression_kind, bundle.record_size)
+      deserializeIndexedFile(
+        indexed_files[i],
+        schema_version,
+        bundle.compression_kind,
+        bundle.record_size,
+        bundle.format
+      )
     );
   }
 
@@ -708,6 +910,7 @@ std::uint64_t scanSequentialPlainRequestedRecords(
   const std::string& file,
   const std::string& type,
   bool include_qual,
+  bool collapse_sequence_lines,
   const std::unordered_set<std::uint64_t>& requested_local_ids,
   const std::function<void(std::uint64_t, const ParsedRecord&)>& on_record
   #ifdef FASTQINDEXR_TIMING
@@ -744,16 +947,17 @@ std::uint64_t scanSequentialPlainRequestedRecords(
   };
 
   const bool is_fastq = (type == "fastq");
-  const int lines_per_record = is_fastq ? 4 : 2;
   std::uint64_t local_id = 0;
   std::uint64_t selected_count = 0;
   bool capture_current_record = is_requested(local_id);
   int line_in_record = 0;
+  bool fasta_in_record = false;
   std::string current_line;
   current_line.reserve(256);
   std::string header;
   std::string seq;
   std::string qual;
+  std::vector<std::string> fasta_seq_lines;
   std::vector<char> buffer(kGzBufferSize * 8, '\0');
   const std::string empty_line;
 
@@ -761,8 +965,8 @@ std::uint64_t scanSequentialPlainRequestedRecords(
     #ifdef FASTQINDEXR_TIMING
     const auto parse_t0 = std::chrono::steady_clock::now();
     #endif
-    if (capture_current_record) {
-      if (is_fastq) {
+    if (is_fastq) {
+      if (capture_current_record) {
         if (line_in_record == 0) {
           header = line;
         } else if (line_in_record == 1) {
@@ -770,16 +974,9 @@ std::uint64_t scanSequentialPlainRequestedRecords(
         } else if (line_in_record == 3) {
           qual = line;
         }
-      } else {
-        if (line_in_record == 0) {
-          header = line;
-        } else if (line_in_record == 1) {
-          seq = line;
-        }
       }
-    }
-    line_in_record++;
-    if (line_in_record == lines_per_record) {
+      line_in_record++;
+    if (line_in_record == 4) {
       #ifdef FASTQINDEXR_TIMING
       if (diag != nullptr) {
         const auto parse_t1 = std::chrono::steady_clock::now();
@@ -823,6 +1020,33 @@ std::uint64_t scanSequentialPlainRequestedRecords(
       qual.clear();
       return;
     }
+    } else {
+      if (!line.empty() && line.front() == '>') {
+        if (fasta_in_record) {
+          if (capture_current_record) {
+            const ParsedRecord rec{
+              trimPrefix(header, '>'),
+              joinFastaSeqLines(fasta_seq_lines, collapse_sequence_lines),
+              ""
+            };
+            on_record(local_id, rec);
+            #ifdef FASTQINDEXR_TIMING
+            if (diag != nullptr) {
+              diag->fallback_records++;
+            }
+            #endif
+            selected_count++;
+          }
+          local_id++;
+          capture_current_record = is_requested(local_id);
+          fasta_seq_lines.clear();
+        }
+        header = line;
+        fasta_in_record = true;
+      } else if (fasta_in_record && capture_current_record) {
+        fasta_seq_lines.push_back(line);
+      }
+    }
     #ifdef FASTQINDEXR_TIMING
     if (diag != nullptr) {
       const auto parse_t1 = std::chrono::steady_clock::now();
@@ -852,7 +1076,7 @@ std::uint64_t scanSequentialPlainRequestedRecords(
       if (seg_end > line_start && buffer[seg_end - 1] == '\r') {
         seg_end--;
       }
-      if (capture_current_record) {
+      if (capture_current_record || !is_fastq) {
         if (seg_end > line_start) {
           const char* seg_ptr = buffer.data() + line_start;
           const std::size_t seg_len = seg_end - line_start;
@@ -869,7 +1093,7 @@ std::uint64_t scanSequentialPlainRequestedRecords(
       }
       line_start = i + 1;
     }
-    if (line_start < n_read && capture_current_record) {
+    if (line_start < n_read && (capture_current_record || !is_fastq)) {
       const char* seg_ptr = buffer.data() + line_start;
       const std::size_t seg_len = n_read - line_start;
       if (current_line.empty()) {
@@ -889,6 +1113,22 @@ std::uint64_t scanSequentialPlainRequestedRecords(
   if (!current_line.empty()) {
     consume_line(current_line);
   }
+  if (!is_fastq && fasta_in_record) {
+    if (capture_current_record) {
+      const ParsedRecord rec{
+        trimPrefix(header, '>'),
+        joinFastaSeqLines(fasta_seq_lines, collapse_sequence_lines),
+        ""
+      };
+      on_record(local_id, rec);
+      #ifdef FASTQINDEXR_TIMING
+      if (diag != nullptr) {
+        diag->fallback_records++;
+      }
+      #endif
+      selected_count++;
+    }
+  }
 
   return selected_count;
 }
@@ -897,6 +1137,7 @@ std::uint64_t scanSequentialRequestedRecords(
   const std::string& file,
   const std::string& type,
   bool include_qual,
+  bool collapse_sequence_lines,
   const std::unordered_set<std::uint64_t>& requested_local_ids,
   const std::function<void(std::uint64_t, const ParsedRecord&)>& on_record
   #ifdef FASTQINDEXR_TIMING
@@ -909,6 +1150,7 @@ std::uint64_t scanSequentialRequestedRecords(
       file,
       type,
       include_qual,
+      collapse_sequence_lines,
       requested_local_ids,
       on_record
       #ifdef FASTQINDEXR_TIMING
@@ -946,16 +1188,17 @@ std::uint64_t scanSequentialRequestedRecords(
   };
 
   const bool is_fastq = (type == "fastq");
-  const int lines_per_record = is_fastq ? 4 : 2;
   std::uint64_t local_id = 0;
   std::uint64_t selected_count = 0;
   bool capture_current_record = is_requested(local_id);
   int line_in_record = 0;
+  bool fasta_in_record = false;
   std::string current_line;
   current_line.reserve(256);
   std::string header;
   std::string seq;
   std::string qual;
+  std::vector<std::string> fasta_seq_lines;
   std::vector<char> buffer(kGzBufferSize * 8, '\0');
   const std::string empty_line;
 
@@ -963,8 +1206,8 @@ std::uint64_t scanSequentialRequestedRecords(
     #ifdef FASTQINDEXR_TIMING
     const auto parse_t0 = std::chrono::steady_clock::now();
     #endif
-    if (capture_current_record) {
-      if (is_fastq) {
+    if (is_fastq) {
+      if (capture_current_record) {
         if (line_in_record == 0) {
           header = line;
         } else if (line_in_record == 1) {
@@ -972,16 +1215,9 @@ std::uint64_t scanSequentialRequestedRecords(
         } else if (line_in_record == 3) {
           qual = line;
         }
-      } else {
-        if (line_in_record == 0) {
-          header = line;
-        } else if (line_in_record == 1) {
-          seq = line;
-        }
       }
-    }
-    line_in_record++;
-    if (line_in_record == lines_per_record) {
+      line_in_record++;
+      if (line_in_record == 4) {
       #ifdef FASTQINDEXR_TIMING
       if (diag != nullptr) {
         const auto parse_t1 = std::chrono::steady_clock::now();
@@ -1024,6 +1260,33 @@ std::uint64_t scanSequentialRequestedRecords(
       seq.clear();
       qual.clear();
       return;
+    }
+    } else {
+      if (!line.empty() && line.front() == '>') {
+        if (fasta_in_record) {
+          if (capture_current_record) {
+            const ParsedRecord rec{
+              trimPrefix(header, '>'),
+              joinFastaSeqLines(fasta_seq_lines, collapse_sequence_lines),
+              ""
+            };
+            on_record(local_id, rec);
+            #ifdef FASTQINDEXR_TIMING
+            if (diag != nullptr) {
+              diag->fallback_records++;
+            }
+            #endif
+            selected_count++;
+          }
+          local_id++;
+          capture_current_record = is_requested(local_id);
+          fasta_seq_lines.clear();
+        }
+        header = line;
+        fasta_in_record = true;
+      } else if (fasta_in_record && capture_current_record) {
+        fasta_seq_lines.push_back(line);
+      }
     }
     #ifdef FASTQINDEXR_TIMING
     if (diag != nullptr) {
@@ -1062,7 +1325,7 @@ std::uint64_t scanSequentialRequestedRecords(
       if (seg_end > line_start && buffer[seg_end - 1] == '\r') {
         seg_end--;
       }
-      if (capture_current_record) {
+      if (capture_current_record || !is_fastq) {
         if (seg_end > line_start) {
           const char* seg_ptr = buffer.data() + line_start;
           const std::size_t seg_len = seg_end - line_start;
@@ -1079,7 +1342,7 @@ std::uint64_t scanSequentialRequestedRecords(
       }
       line_start = i + 1;
     }
-    if (line_start < static_cast<std::size_t>(n_read) && capture_current_record) {
+    if (line_start < static_cast<std::size_t>(n_read) && (capture_current_record || !is_fastq)) {
       const char* seg_ptr = buffer.data() + line_start;
       const std::size_t seg_len = static_cast<std::size_t>(n_read) - line_start;
       if (current_line.empty()) {
@@ -1099,6 +1362,22 @@ std::uint64_t scanSequentialRequestedRecords(
   if (!current_line.empty()) {
     consume_line(current_line);
   }
+  if (!is_fastq && fasta_in_record) {
+    if (capture_current_record) {
+      const ParsedRecord rec{
+        trimPrefix(header, '>'),
+        joinFastaSeqLines(fasta_seq_lines, collapse_sequence_lines),
+        ""
+      };
+      on_record(local_id, rec);
+      #ifdef FASTQINDEXR_TIMING
+      if (diag != nullptr) {
+        diag->fallback_records++;
+      }
+      #endif
+      selected_count++;
+    }
+  }
 
   gzclose(stream);
   return selected_count;
@@ -1110,7 +1389,8 @@ void sequentialFallbackCollect(
   const std::unordered_set<std::uint64_t>& requested_local_ids,
   std::uint64_t global_offset,
   std::unordered_map<std::uint64_t, ParsedRecord>* selected_global,
-  bool include_qual
+  bool include_qual,
+  bool collapse_sequence_lines
   #ifdef FASTQINDEXR_TIMING
   , ExtractionDiagnostics* diag
   #endif
@@ -1122,6 +1402,7 @@ void sequentialFallbackCollect(
     file,
     type,
     include_qual,
+    collapse_sequence_lines,
     requested_local_ids,
     [&](std::uint64_t local_id, const ParsedRecord& rec) {
       (*selected_global)[global_offset + local_id] = rec;
@@ -1176,6 +1457,44 @@ ParsedRecord readOneRecordFromPlainStream(
   const std::string& type,
   bool include_qual
 ) {
+  if (type == "fasta") {
+    std::string line;
+    std::string header;
+    std::vector<std::string> seq_lines;
+    if (!std::getline(*in, line)) {
+      throw std::runtime_error("Unexpected EOF while reading plain FASTA record.");
+    }
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    if (line.empty() || line.front() != '>') {
+      throw std::runtime_error("Malformed FASTA record header in plain input.");
+    }
+    header = line;
+    while (true) {
+      const std::streampos pos = in->tellg();
+      if (!std::getline(*in, line)) {
+        break;
+      }
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
+      if (!line.empty() && line.front() == '>') {
+        in->clear();
+        in->seekg(pos, std::ios::beg);
+        break;
+      }
+      seq_lines.push_back(line);
+    }
+    if (seq_lines.empty()) {
+      throw std::runtime_error("FASTA record has no sequence lines in plain input.");
+    }
+    return ParsedRecord{
+      trimPrefix(header, '>'),
+      joinFastaSeqLines(seq_lines, false),
+      ""
+    };
+  }
   std::string line;
   std::string header;
   std::string seq;
@@ -1292,11 +1611,200 @@ void extractPlainIndexedRecords(
   }
 }
 
+template <typename EmitFn>
+void extractGzipFastaLogicalRegion(
+  const std::string& file,
+  fastqindex_core::Extractor* extractor,
+  const GzipIndexedFile& gzip_indexed,
+  std::uint64_t region_start,
+  std::uint64_t region_end,
+  const std::unordered_set<std::uint64_t>& requested_logical_ids,
+  bool collapse_sequence_lines,
+  const EmitFn& emit
+  #ifdef FASTQINDEXR_TIMING
+  ,
+  ExtractionDiagnostics* diag
+  #endif
+) {
+  const auto span = fastaLogicalRangeToLineSpan(
+    gzip_indexed,
+    gzip_indexed.index.total_lines,
+    gzip_indexed.record_count,
+    region_start,
+    region_end
+  );
+  const std::uint64_t line_start = span.first;
+  const std::uint64_t line_end = span.second;
+  const std::uint64_t line_count = line_end - line_start + 1;
+  const bool dense =
+    requested_logical_ids.size() == static_cast<std::size_t>(region_end - region_start + 1);
+  std::unordered_set<std::uint64_t> requested_line_ids;
+  if (dense) {
+    requested_line_ids.reserve(static_cast<std::size_t>(line_count));
+    for (std::uint64_t ln = line_start; ln <= line_end; ++ln) {
+      requested_line_ids.insert(ln);
+    }
+  } else {
+    for (std::uint64_t rid = region_start; rid <= region_end; ++rid) {
+      if (requested_logical_ids.find(rid) == requested_logical_ids.end()) {
+        continue;
+      }
+      const std::uint64_t hline = fastaHeaderLineAt(gzip_indexed, rid);
+      const std::uint64_t next_h = (rid + 1 < gzip_indexed.record_count) ?
+        fastaHeaderLineAt(gzip_indexed, rid + 1) :
+        gzip_indexed.index.total_lines;
+      for (std::uint64_t ln = hline; ln < next_h; ++ln) {
+        requested_line_ids.insert(ln);
+      }
+    }
+  }
+  std::unordered_map<std::uint64_t, std::string> line_text;
+  if (!dense) {
+    line_text.reserve(requested_line_ids.size());
+  }
+  std::vector<std::string> dense_lines;
+  std::vector<unsigned char> dense_seen;
+  if (dense) {
+    dense_lines.assign(static_cast<std::size_t>(line_count), "");
+    dense_seen.assign(static_cast<std::size_t>(line_count), 0);
+  }
+  #ifdef FASTQINDEXR_TIMING
+  fastqindex_core::SelectiveExtractTimings selective_timings;
+  fastqindex_core::SelectiveExtractTimings* selective_timings_ptr =
+    (diag != nullptr) ? &selective_timings : nullptr;
+  #endif
+  extractor->extractSelected(
+    file,
+    gzip_indexed.index.entries,
+    line_start,
+    line_count,
+    1,
+    requested_line_ids,
+    line_start,
+    [&](std::uint64_t line_id, const std::vector<std::string>& rec_lines) {
+      const std::string line = rec_lines.empty() ? std::string{} : rec_lines[0];
+      if (dense) {
+        const std::uint64_t rel = line_id - line_start;
+        if (rel >= line_count) {
+          throw std::runtime_error("Dense FASTA line id out of range.");
+        }
+        dense_lines[static_cast<std::size_t>(rel)] = line;
+        dense_seen[static_cast<std::size_t>(rel)] = 1;
+      } else {
+        line_text[line_id] = line;
+      }
+    }
+    #ifdef FASTQINDEXR_TIMING
+    ,
+    selective_timings_ptr
+    #endif
+  );
+  if (dense) {
+    for (std::uint64_t i = 0; i < line_count; ++i) {
+      if (dense_seen[static_cast<std::size_t>(i)] == 0) {
+        throw std::runtime_error("Incomplete FASTA dense line extraction.");
+      }
+    }
+    emitFastaLogicalRecordsFromWindowLines(
+      dense_lines,
+      line_start,
+      gzip_indexed,
+      gzip_indexed.index.total_lines,
+      gzip_indexed.record_count,
+      region_start,
+      region_end,
+      collapse_sequence_lines,
+      [&](std::uint64_t local_id, ParsedRecord&& rec) {
+        emit(local_id, std::move(rec));
+      }
+    );
+    #ifdef FASTQINDEXR_TIMING
+    if (diag != nullptr) {
+      diag->time_selective_seek_init_ms += selective_timings.time_seek_init_ms;
+      diag->time_selective_inflate_ms += selective_timings.time_inflate_ms;
+      diag->time_selective_parse_ms += selective_timings.time_parse_ms;
+      diag->time_selective_line_split_ms += selective_timings.time_line_split_ms;
+      diag->time_selective_materialize_ms += selective_timings.time_materialize_ms;
+      diag->time_selective_callback_ms += selective_timings.time_callback_ms;
+    }
+    #endif
+    return;
+  }
+  for (std::uint64_t rid = region_start; rid <= region_end; ++rid) {
+    if (requested_logical_ids.find(rid) == requested_logical_ids.end()) {
+      continue;
+    }
+    const std::uint64_t hline = fastaHeaderLineAt(gzip_indexed, rid);
+    const std::uint64_t next_h = (rid + 1 < gzip_indexed.record_count) ?
+      fastaHeaderLineAt(gzip_indexed, rid + 1) :
+      gzip_indexed.index.total_lines;
+    auto h_it = line_text.find(hline);
+    if (h_it == line_text.end() || h_it->second.empty() || h_it->second.front() != '>') {
+      throw std::runtime_error("Malformed FASTA sparse header extraction.");
+    }
+    std::vector<std::string> seq_lines;
+    for (std::uint64_t ln = hline + 1; ln < next_h; ++ln) {
+      auto s_it = line_text.find(ln);
+      if (s_it == line_text.end()) {
+        throw std::runtime_error("Incomplete FASTA sparse line extraction.");
+      }
+      seq_lines.push_back(s_it->second);
+    }
+    ParsedRecord rec;
+    rec.id = trimPrefix(h_it->second, '>');
+    rec.seq = joinFastaSeqLines(seq_lines, collapse_sequence_lines);
+    emit(rid, std::move(rec));
+  }
+  #ifdef FASTQINDEXR_TIMING
+  if (diag != nullptr) {
+    diag->time_selective_seek_init_ms += selective_timings.time_seek_init_ms;
+    diag->time_selective_inflate_ms += selective_timings.time_inflate_ms;
+    diag->time_selective_parse_ms += selective_timings.time_parse_ms;
+    diag->time_selective_line_split_ms += selective_timings.time_line_split_ms;
+    diag->time_selective_materialize_ms += selective_timings.time_materialize_ms;
+    diag->time_selective_callback_ms += selective_timings.time_callback_ms;
+  }
+  #endif
+}
+
 std::unique_ptr<PlainIndexedFile> buildPlainFileIndex(const std::string& path, int record_size) {
   std::unique_ptr<PlainIndexedFile> out(new PlainIndexedFile());
   std::ifstream in(path, std::ios::binary);
   if (!in.good()) {
     throw std::runtime_error("Could not open plain input for indexing: " + path);
+  }
+  if (record_size == 2) {
+    // FASTA plain index: record starts are header lines only.
+    std::string line;
+    bool saw_header = false;
+    bool current_has_seq = false;
+    while (true) {
+      const std::streampos pos = in.tellg();
+      if (!std::getline(in, line)) {
+        break;
+      }
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
+      if (!line.empty() && line.front() == '>') {
+        if (saw_header && !current_has_seq) {
+          throw std::runtime_error("FASTA record has no sequence lines: " + path);
+        }
+        saw_header = true;
+        current_has_seq = false;
+        out->plain_header_byte_offsets.push_back(static_cast<std::uint64_t>(pos));
+      } else if (saw_header) {
+        current_has_seq = true;
+      }
+    }
+    if (!saw_header) {
+      throw std::runtime_error("FASTA input has no records (no header lines): " + path);
+    }
+    if (!current_has_seq) {
+      throw std::runtime_error("FASTA record has no sequence lines: " + path);
+    }
+    out->record_count = static_cast<std::uint64_t>(out->plain_header_byte_offsets.size());
+    return out;
   }
   std::uint64_t line_index = 0;
   std::uint64_t file_offset = 0;
@@ -1351,6 +1859,7 @@ SelectedRecordMap collectRequestedRecords(
   const IndexBundle& bundle,
   const std::vector<std::uint64_t>& requested,
   bool include_qual,
+  bool collapse_sequence_lines,
   std::uint64_t max_bridge_gap,
   std::uint64_t max_region_records,
   ExtractExecutionMode mode
@@ -1395,7 +1904,8 @@ SelectedRecordMap collectRequestedRecords(
         requested_set,
         bundle.record_offsets[file_idx],
         &selected_global,
-        need_qual
+        need_qual,
+        collapse_sequence_lines
         #ifdef FASTQINDEXR_TIMING
         , diag
         #endif
@@ -1461,7 +1971,32 @@ SelectedRecordMap collectRequestedRecords(
         const std::uint64_t region_span = region_end - region_start + 1;
         const bool dense_region = (requested_in_region == region_span);
 
-        if (dense_region) {
+        if (bundle.format == "fasta") {
+          const auto& gz_idx = asGzipIndexedFile(*bundle.indexed_files[file_idx]);
+          const std::unordered_set<std::uint64_t> region_requested_set(region_begin, region_end_it);
+          std::uint64_t selected_records = 0;
+          extractGzipFastaLogicalRegion(
+            Rcpp::as<std::string>(files[file_idx]),
+            &extractor,
+            gz_idx,
+            region_start,
+            region_end,
+            region_requested_set,
+            collapse_sequence_lines,
+            [&](std::uint64_t local_id, ParsedRecord&& rec) {
+              const std::uint64_t global_id = bundle.record_offsets[file_idx] + local_id;
+              selected_global[global_id] = std::move(rec);
+              selected_records++;
+            }
+            #ifdef FASTQINDEXR_TIMING
+            ,
+            diag
+            #endif
+          );
+          if (selected_records < requested_in_region) {
+            throw std::runtime_error("Partial extraction for requested region.");
+          }
+        } else if (dense_region) {
           #ifdef FASTQINDEXR_TIMING
           const auto dense_t0 = std::chrono::steady_clock::now();
           #endif
@@ -1558,7 +2093,8 @@ SelectedRecordMap collectRequestedRecords(
           requested_set,
           bundle.record_offsets[file_idx],
           &selected_global,
-          need_qual
+          need_qual,
+          collapse_sequence_lines
           #ifdef FASTQINDEXR_TIMING
           , diag
           #endif
@@ -1574,7 +2110,8 @@ SelectedRecordMap collectRequestedRecords(
           requested_set,
           bundle.record_offsets[file_idx],
           &selected_global,
-          need_qual
+          need_qual,
+          collapse_sequence_lines
           #ifdef FASTQINDEXR_TIMING
           , diag
           #endif
@@ -1608,6 +2145,19 @@ std::string renderRecord(const ParsedRecord& record, const std::string& output_t
   return ">" + record.id + "\n" + record.seq + "\n";
 }
 
+std::string renderRecord(
+  const ParsedRecord& record,
+  const std::string& output_type,
+  bool collapse_sequence_lines
+) {
+  if (output_type != "fasta" || !collapse_sequence_lines) {
+    return renderRecord(record, output_type);
+  }
+  std::string seq = record.seq;
+  seq.erase(std::remove(seq.begin(), seq.end(), '\n'), seq.end());
+  return ">" + record.id + "\n" + seq + "\n";
+}
+
 std::unique_ptr<OutputWriter> makeOutputWriter(
   const std::string& path,
   bool append,
@@ -1624,6 +2174,7 @@ std::uint64_t sequentialFallbackStreamToFile(
   const std::string& type,
   const std::unordered_set<std::uint64_t>& requested_local_ids,
   bool need_qual,
+  bool collapse_sequence_lines,
   const std::string& output_type,
   OutputWriter* writer
   #ifdef FASTQINDEXR_TIMING
@@ -1637,9 +2188,10 @@ std::uint64_t sequentialFallbackStreamToFile(
     file,
     type,
     need_qual,
+    collapse_sequence_lines,
     requested_local_ids,
     [&](std::uint64_t, const ParsedRecord& rec) {
-      writer->write(renderRecord(rec, output_type));
+      writer->write(renderRecord(rec, output_type, collapse_sequence_lines));
     }
     #ifdef FASTQINDEXR_TIMING
     , diag
@@ -1661,6 +2213,7 @@ double fullCollectAndRewriteToFile(
   const std::vector<std::uint64_t>& requested,
   const std::string& resolved_output_type,
   const std::string& outfile,
+  bool collapse_sequence_lines,
   bool compress,
   std::uint64_t max_bridge_gap,
   std::uint64_t max_region_records,
@@ -1675,6 +2228,7 @@ double fullCollectAndRewriteToFile(
     bundle,
     requested,
     include_qual,
+    collapse_sequence_lines,
     max_bridge_gap,
     max_region_records,
     mode
@@ -1689,7 +2243,7 @@ double fullCollectAndRewriteToFile(
     if (it == selected_global.end()) {
       throw std::runtime_error("Could not resolve all requested ids with provided index/files.");
     }
-    writer->write(renderRecord(it->second, resolved_output_type));
+    writer->write(renderRecord(it->second, resolved_output_type, collapse_sequence_lines));
     written++;
   }
   return static_cast<double>(written);
@@ -1701,6 +2255,7 @@ double streamSortedUniqueToFile(
   const std::vector<std::uint64_t>& requested,
   const std::string& resolved_output_type,
   const std::string& outfile,
+  bool collapse_sequence_lines,
   bool compress,
   std::uint64_t max_bridge_gap,
   std::uint64_t max_region_records,
@@ -1741,6 +2296,7 @@ double streamSortedUniqueToFile(
         bundle.format,
         requested_set,
         need_qual,
+        collapse_sequence_lines,
         resolved_output_type,
         writer.get()
         #ifdef FASTQINDEXR_TIMING
@@ -1761,7 +2317,7 @@ double streamSortedUniqueToFile(
         max_region_records,
         bundle.record_size,
         [&](std::uint64_t, const ParsedRecord& rec) {
-          writer->write(renderRecord(rec, resolved_output_type));
+          writer->write(renderRecord(rec, resolved_output_type, collapse_sequence_lines));
           n_written++;
         }
         #ifdef FASTQINDEXR_TIMING
@@ -1809,7 +2365,33 @@ double streamSortedUniqueToFile(
         const std::uint64_t requested_in_region = static_cast<std::uint64_t>(region_end_it - region_begin);
         const std::uint64_t region_span = region_end - region_start + 1;
         const bool dense_region = (requested_in_region == region_span);
-        if (dense_region) {
+        if (bundle.format == "fasta") {
+          const auto& gz_idx = asGzipIndexedFile(*bundle.indexed_files[file_idx]);
+          const std::unordered_set<std::uint64_t> region_requested_set(region_begin, region_end_it);
+          std::uint64_t selected_records = 0;
+          extractGzipFastaLogicalRegion(
+            Rcpp::as<std::string>(files[file_idx]),
+            &extractor,
+            gz_idx,
+            region_start,
+            region_end,
+            region_requested_set,
+            collapse_sequence_lines,
+            [&](std::uint64_t, ParsedRecord&& rec) {
+              writer->write(renderRecord(rec, resolved_output_type, collapse_sequence_lines));
+              wrote_in_this_file = true;
+              n_written++;
+              selected_records++;
+            }
+            #ifdef FASTQINDEXR_TIMING
+            ,
+            diag
+            #endif
+          );
+          if (selected_records < requested_in_region) {
+            throw std::runtime_error("Partial extraction for requested region.");
+          }
+        } else if (dense_region) {
           #ifdef FASTQINDEXR_TIMING
           const auto dense_t0 = std::chrono::steady_clock::now();
           #endif
@@ -1825,7 +2407,7 @@ double streamSortedUniqueToFile(
             need_qual,
             [&](std::uint64_t, const fastqindex_core::ExtractedRecord& rec_in) {
               ParsedRecord rec{rec_in.seq_id, rec_in.seq, rec_in.qual};
-              writer->write(renderRecord(rec, resolved_output_type));
+              writer->write(renderRecord(rec, resolved_output_type, collapse_sequence_lines));
               wrote_in_this_file = true;
               n_written++;
               extracted_records++;
@@ -1867,7 +2449,7 @@ double streamSortedUniqueToFile(
             need_qual,
             [&](std::uint64_t, const fastqindex_core::ExtractedRecord& rec_in) {
               const ParsedRecord rec{rec_in.seq_id, rec_in.seq, rec_in.qual};
-              writer->write(renderRecord(rec, resolved_output_type));
+              writer->write(renderRecord(rec, resolved_output_type, collapse_sequence_lines));
               wrote_in_this_file = true;
               n_written++;
               selected_records++;
@@ -1903,6 +2485,7 @@ double streamSortedUniqueToFile(
             bundle.format,
             requested_set,
             need_qual,
+            collapse_sequence_lines,
             resolved_output_type,
             writer.get()
             #ifdef FASTQINDEXR_TIMING
@@ -1916,6 +2499,7 @@ double streamSortedUniqueToFile(
             requested,
             resolved_output_type,
             outfile,
+            collapse_sequence_lines,
             compress,
             max_bridge_gap,
             max_region_records,
@@ -1936,6 +2520,7 @@ double streamSortedUniqueToFile(
             bundle.format,
             requested_set,
             need_qual,
+            collapse_sequence_lines,
             resolved_output_type,
             writer.get()
             #ifdef FASTQINDEXR_TIMING
@@ -1949,6 +2534,7 @@ double streamSortedUniqueToFile(
             requested,
             resolved_output_type,
             outfile,
+            collapse_sequence_lines,
             compress,
             max_bridge_gap,
             max_region_records,
@@ -2069,6 +2655,7 @@ SEXP buildDNAStringSetFromRequested(
       bundle,
       requested,
       false,
+      false,
       max_bridge_gap,
       max_region_records,
       mode
@@ -2123,6 +2710,7 @@ SEXP buildDNAStringSetFromRequested(
           requested_set,
           bundle.record_offsets[file_idx],
           &selected_global,
+          false,
           false
           #ifdef FASTQINDEXR_TIMING
           ,
@@ -2217,7 +2805,40 @@ SEXP buildDNAStringSetFromRequested(
           const std::uint64_t requested_in_region = static_cast<std::uint64_t>(region_end_it - region_begin);
           const std::uint64_t region_span = region_end - region_start + 1;
           const bool dense_region = (requested_in_region == region_span);
-          if (dense_region) {
+          if (bundle.format == "fasta") {
+            const auto& gz_idx = asGzipIndexedFile(*bundle.indexed_files[file_idx]);
+            const std::unordered_set<std::uint64_t> region_requested_set(region_begin, region_end_it);
+            std::uint64_t selected_records = 0;
+            extractGzipFastaLogicalRegion(
+              Rcpp::as<std::string>(files[file_idx]),
+              &extractor,
+              gz_idx,
+              region_start,
+              region_end,
+              region_requested_set,
+              false,
+              [&](std::uint64_t, ParsedRecord&& rec) {
+                appendRecordToDNAChunks(
+                  rec,
+                  chunk_chars_limit,
+                  &seq_chunk,
+                  &id_chunk,
+                  &chunk_chars,
+                  &output_index,
+                  &dna_chunks,
+                  renumber_mode
+                );
+                selected_records++;
+              }
+              #ifdef FASTQINDEXR_TIMING
+              ,
+              diag
+              #endif
+            );
+            if (selected_records < requested_in_region) {
+              throw std::runtime_error("Partial extraction for requested region.");
+            }
+          } else if (dense_region) {
             #ifdef FASTQINDEXR_TIMING
             const auto dense_t0 = std::chrono::steady_clock::now();
             #endif
@@ -2339,6 +2960,7 @@ SEXP buildDNAStringSetFromRequested(
           requested_set,
           bundle.record_offsets[file_idx],
           &selected_global,
+          false,
           false
           #ifdef FASTQINDEXR_TIMING
           ,
@@ -2403,7 +3025,8 @@ SelectedRecordMap collectSequentialScanStandalone(
   const std::vector<std::uint64_t>& record_offsets,
   const std::string& format,
   const std::vector<std::uint64_t>& unique_sorted_global_ids,
-  bool include_qual
+  bool include_qual,
+  bool collapse_sequence_lines
   #ifdef FASTQINDEXR_TIMING
   ,
   ExtractionDiagnostics* diag
@@ -2441,6 +3064,7 @@ SelectedRecordMap collectSequentialScanStandalone(
         fpath,
         format,
         need_qual,
+        collapse_sequence_lines,
         requested_set,
         [&](std::uint64_t local_id, const ParsedRecord& rec) {
           selected_global[record_offsets[file_idx] + local_id] = rec;
@@ -2455,6 +3079,7 @@ SelectedRecordMap collectSequentialScanStandalone(
         fpath,
         format,
         need_qual,
+        collapse_sequence_lines,
         requested_set,
         [&](std::uint64_t local_id, const ParsedRecord& rec) {
           selected_global[record_offsets[file_idx] + local_id] = rec;
@@ -2509,10 +3134,21 @@ Rcpp::List cpp_create_index(Rcpp::CharacterVector files, std::string type) {
     if (is_gzip) {
       std::unique_ptr<GzipIndexedFile> gzip_idx(new GzipIndexedFile());
       gzip_idx->index = indexer.createIndex(paths[i]);
-      if (gzip_idx->index.total_lines % static_cast<std::uint64_t>(record_size) != 0) {
-        throw std::runtime_error("Indexed line count is not a multiple of record size for: " + paths[i]);
+      if (type == "fasta") {
+        gzip_idx->fasta_header_line_index = scanGzFastaHeaderLineIndices(paths[i]);
+        if (isLegacyTwoLineFastaLayout(gzip_idx->fasta_header_line_index, gzip_idx->index.total_lines)) {
+          gzip_idx->fasta_header_line_index.clear();
+        }
+        gzip_idx->record_count =
+          gzip_idx->fasta_header_line_index.empty() ?
+          (gzip_idx->index.total_lines / static_cast<std::uint64_t>(record_size)) :
+          static_cast<std::uint64_t>(gzip_idx->fasta_header_line_index.size());
+      } else {
+        if (gzip_idx->index.total_lines % static_cast<std::uint64_t>(record_size) != 0) {
+          throw std::runtime_error("Indexed line count is not a multiple of record size for: " + paths[i]);
+        }
+        gzip_idx->record_count = gzip_idx->index.total_lines / static_cast<std::uint64_t>(record_size);
       }
-      gzip_idx->record_count = gzip_idx->index.total_lines / static_cast<std::uint64_t>(record_size);
       idxf = std::move(gzip_idx);
       file_compression[static_cast<R_xlen_t>(i)] = "gzip";
     } else {
@@ -2583,16 +3219,31 @@ Rcpp::List cpp_read_fqi_index(
   Rcpp::NumericVector per_file_counts(data_paths.size());
   for (size_t i = 0; i < fqi_paths.size(); ++i) {
     std::unique_ptr<GzipIndexedFile> idxf = readSingleFqi(fqi_paths[i]);
-    if (idxf->index.total_lines == 0 && std::filesystem::exists(data_paths[i])) {
-      idxf->index.total_lines = countGzLines(data_paths[i]);
+    if (type == "fasta") {
+      if (std::filesystem::exists(data_paths[i])) {
+        idxf->index.total_lines = countGzLines(data_paths[i]);
+        idxf->fasta_header_line_index = scanGzFastaHeaderLineIndices(data_paths[i]);
+        if (isLegacyTwoLineFastaLayout(idxf->fasta_header_line_index, idxf->index.total_lines)) {
+          idxf->fasta_header_line_index.clear();
+        }
+      }
+      if (!idxf->fasta_header_line_index.empty()) {
+        idxf->record_count = static_cast<std::uint64_t>(idxf->fasta_header_line_index.size());
+      } else {
+        idxf->record_count = idxf->index.total_lines / static_cast<std::uint64_t>(record_size);
+      }
+    } else {
+      if (idxf->index.total_lines == 0 && std::filesystem::exists(data_paths[i])) {
+        idxf->index.total_lines = countGzLines(data_paths[i]);
+      }
+      if (idxf->index.total_lines > 0 &&
+          idxf->index.total_lines % static_cast<std::uint64_t>(record_size) != 0) {
+        throw std::runtime_error(
+          "Indexed line count is not a multiple of record size for: " + fqi_paths[i]
+        );
+      }
+      idxf->record_count = idxf->index.total_lines / static_cast<std::uint64_t>(record_size);
     }
-    if (idxf->index.total_lines > 0 &&
-        idxf->index.total_lines % static_cast<std::uint64_t>(record_size) != 0) {
-      throw std::runtime_error(
-        "Indexed line count is not a multiple of record size for: " + fqi_paths[i]
-      );
-    }
-    idxf->record_count = idxf->index.total_lines / static_cast<std::uint64_t>(record_size);
     bundle.indexed_files.push_back(std::move(idxf));
     bundle.n_records += bundle.indexed_files.back()->record_count;
     bundle.record_offsets.push_back(bundle.n_records);
@@ -2713,6 +3364,7 @@ Rcpp::List cpp_extract_sequences(
     bundle,
     unique_ids,
     need_parsed_qual,
+    false,
     bridge_gap,
     region_records,
     mode
@@ -2782,6 +3434,7 @@ Rcpp::List cpp_extract_sequences_to_file(
   std::string outfile,
   bool append,
   bool compress,
+  bool collapse_sequence_lines,
   double max_bridge_gap,
   double max_region_records,
   std::string extract_mode,
@@ -2826,6 +3479,7 @@ Rcpp::List cpp_extract_sequences_to_file(
       requested,
       resolved_output_type,
       outfile,
+      collapse_sequence_lines,
       compress,
       bridge_gap,
       region_records,
@@ -2849,6 +3503,7 @@ Rcpp::List cpp_extract_sequences_to_file(
     bundle,
     requested,
     need_parsed_qual,
+    collapse_sequence_lines,
     bridge_gap,
     region_records,
     mode
@@ -2871,7 +3526,7 @@ Rcpp::List cpp_extract_sequences_to_file(
     if (it == selected_global.end()) {
       throw std::runtime_error("Could not resolve all requested ids with provided index/files.");
     }
-    writer->write(renderRecord(it->second, resolved_output_type));
+    writer->write(renderRecord(it->second, resolved_output_type, collapse_sequence_lines));
     written++;
   }
   Rcpp::List out = Rcpp::List::create(
@@ -2975,16 +3630,23 @@ Rcpp::NumericVector cpp_scan_record_offsets(Rcpp::CharacterVector files, std::st
   std::uint64_t cum = 0;
   for (R_xlen_t i = 0; i < files.size(); ++i) {
     const std::string p = Rcpp::as<std::string>(files[i]);
-    std::uint64_t total_lines = 0;
-    if (fileHasGzipMagic(p)) {
-      total_lines = countGzLines(p);
+    if (type == "fasta") {
+      const std::uint64_t recs = fileHasGzipMagic(p) ?
+        countGzFastaRecords(p) :
+        countPlainFastaRecords(p);
+      cum += recs;
     } else {
-      total_lines = countPlainTotalLines(p);
+      std::uint64_t total_lines = 0;
+      if (fileHasGzipMagic(p)) {
+        total_lines = countGzLines(p);
+      } else {
+        total_lines = countPlainTotalLines(p);
+      }
+      if (total_lines % static_cast<std::uint64_t>(record_size) != 0) {
+        throw std::runtime_error("Line count is not a multiple of record size for: " + p);
+      }
+      cum += total_lines / static_cast<std::uint64_t>(record_size);
     }
-    if (total_lines % static_cast<std::uint64_t>(record_size) != 0) {
-      throw std::runtime_error("Line count is not a multiple of record size for: " + p);
-    }
-    cum += total_lines / static_cast<std::uint64_t>(record_size);
     offsets[i + 1] = static_cast<double>(cum);
   }
   return offsets;
@@ -3050,7 +3712,8 @@ Rcpp::List cpp_extract_sequences_streaming(
     roff,
     type,
     unique_ids,
-    include_qual
+    include_qual,
+    false
     #ifdef FASTQINDEXR_TIMING
     ,
     diag_ptr
@@ -3124,6 +3787,7 @@ Rcpp::List cpp_extract_sequences_to_file_streaming(
   std::string outfile,
   bool append,
   bool compress,
+  bool collapse_sequence_lines,
   bool diagnostics
 ) {
   if (source_type != "fasta" && source_type != "fastq") {
@@ -3186,9 +3850,10 @@ Rcpp::List cpp_extract_sequences_to_file_streaming(
           fpath,
           source_type,
           need_qual,
+          collapse_sequence_lines,
           requested_set,
           [&](std::uint64_t, const ParsedRecord& rec) {
-            writer->write(renderRecord(rec, resolved_output_type));
+            writer->write(renderRecord(rec, resolved_output_type, collapse_sequence_lines));
             n_written++;
           }
           #ifdef FASTQINDEXR_TIMING
@@ -3201,9 +3866,10 @@ Rcpp::List cpp_extract_sequences_to_file_streaming(
           fpath,
           source_type,
           need_qual,
+          collapse_sequence_lines,
           requested_set,
           [&](std::uint64_t, const ParsedRecord& rec) {
-            writer->write(renderRecord(rec, resolved_output_type));
+            writer->write(renderRecord(rec, resolved_output_type, collapse_sequence_lines));
             n_written++;
           }
           #ifdef FASTQINDEXR_TIMING
@@ -3231,7 +3897,8 @@ Rcpp::List cpp_extract_sequences_to_file_streaming(
     roff,
     source_type,
     unique_sorted,
-    need_parsed_qual
+    need_parsed_qual,
+    collapse_sequence_lines
     #ifdef FASTQINDEXR_TIMING
     ,
     diag_ptr
@@ -3245,7 +3912,7 @@ Rcpp::List cpp_extract_sequences_to_file_streaming(
     if (it == selected_global.end()) {
       throw std::runtime_error("Could not resolve all requested ids (streaming extract).");
     }
-    writer->write(renderRecord(it->second, resolved_output_type));
+    writer->write(renderRecord(it->second, resolved_output_type, collapse_sequence_lines));
     written++;
   }
   Rcpp::List out = Rcpp::List::create(
@@ -3316,6 +3983,7 @@ SEXP cpp_extract_sequences_dnastringset_streaming(
     roff,
     source_type,
     unique_ids,
+    false,
     false
     #ifdef FASTQINDEXR_TIMING
     ,
