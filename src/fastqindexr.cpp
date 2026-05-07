@@ -17,6 +17,7 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -1076,6 +1077,17 @@ std::uint64_t scanSequentialPlainRequestedRecords(
       if (seg_end > line_start && buffer[seg_end - 1] == '\r') {
         seg_end--;
       }
+      const bool fasta_skip_seq_body =
+        !is_fastq && fasta_in_record && !capture_current_record;
+      if (
+        fasta_skip_seq_body &&
+        current_line.empty() &&
+        seg_end > line_start &&
+        buffer[line_start] != static_cast<char>('>')
+      ) {
+        line_start = i + 1;
+        continue;
+      }
       if (capture_current_record || !is_fastq) {
         if (seg_end > line_start) {
           const char* seg_ptr = buffer.data() + line_start;
@@ -1325,6 +1337,17 @@ std::uint64_t scanSequentialRequestedRecords(
       if (seg_end > line_start && buffer[seg_end - 1] == '\r') {
         seg_end--;
       }
+      const bool fasta_skip_seq_body =
+        !is_fastq && fasta_in_record && !capture_current_record;
+      if (
+        fasta_skip_seq_body &&
+        current_line.empty() &&
+        seg_end > line_start &&
+        buffer[line_start] != static_cast<char>('>')
+      ) {
+        line_start = i + 1;
+        continue;
+      }
       if (capture_current_record || !is_fastq) {
         if (seg_end > line_start) {
           const char* seg_ptr = buffer.data() + line_start;
@@ -1455,7 +1478,8 @@ ExtractExecutionMode parseExtractExecutionMode(const std::string& mode) {
 ParsedRecord readOneRecordFromPlainStream(
   std::istream* in,
   const std::string& type,
-  bool include_qual
+  bool include_qual,
+  std::optional<std::uint64_t> record_end_exclusive = std::nullopt
 ) {
   if (type == "fasta") {
     std::string line;
@@ -1471,18 +1495,46 @@ ParsedRecord readOneRecordFromPlainStream(
       throw std::runtime_error("Malformed FASTA record header in plain input.");
     }
     header = line;
+    if (record_end_exclusive.has_value()) {
+      const std::streamoff bound_off =
+        static_cast<std::streamoff>(*record_end_exclusive);
+      while (static_cast<std::streamoff>(in->tellg()) < bound_off) {
+        if (!std::getline(*in, line)) {
+          throw std::runtime_error("Unexpected EOF while reading plain FASTA record.");
+        }
+        if (!line.empty() && line.back() == '\r') {
+          line.pop_back();
+        }
+        if (!line.empty() && line.front() == '>') {
+          throw std::runtime_error("Malformed FASTA: unexpected header inside record.");
+        }
+        seq_lines.push_back(line);
+      }
+      if (seq_lines.empty()) {
+        throw std::runtime_error("FASTA record has no sequence lines in plain input.");
+      }
+      if (static_cast<std::streamoff>(in->tellg()) != bound_off) {
+        throw std::runtime_error("FASTA indexed record boundary mismatch.");
+      }
+      return ParsedRecord{
+        trimPrefix(header, '>'),
+        joinFastaSeqLines(seq_lines, false),
+        ""
+      };
+    }
     while (true) {
-      const std::streampos pos = in->tellg();
+      const int c = in->peek();
+      if (c == std::char_traits<char>::eof()) {
+        break;
+      }
+      if (c == '>') {
+        break;
+      }
       if (!std::getline(*in, line)) {
         break;
       }
       if (!line.empty() && line.back() == '\r') {
         line.pop_back();
-      }
-      if (!line.empty() && line.front() == '>') {
-        in->clear();
-        in->seekg(pos, std::ios::beg);
-        break;
       }
       seq_lines.push_back(line);
     }
@@ -1516,6 +1568,13 @@ ParsedRecord readOneRecordFromPlainStream(
       qual = line;
     }
   }
+  if (record_end_exclusive.has_value()) {
+    const std::streamoff bound_off =
+      static_cast<std::streamoff>(*record_end_exclusive);
+    if (static_cast<std::streamoff>(in->tellg()) != bound_off) {
+      throw std::runtime_error("Plain FASTQ indexed record boundary mismatch.");
+    }
+  }
   const char prefix = is_fastq ? '@' : '>';
   return ParsedRecord{
     trimPrefix(header, prefix),
@@ -1541,8 +1600,12 @@ class PlainIndexedRecordReader {
     }
   }
 
-  ParsedRecord readOne(const std::string& type, bool include_qual) {
-    return readOneRecordFromPlainStream(&stream_, type, include_qual);
+  ParsedRecord readOne(
+    const std::string& type,
+    bool include_qual,
+    std::optional<std::uint64_t> record_end_exclusive = std::nullopt
+  ) {
+    return readOneRecordFromPlainStream(&stream_, type, include_qual, record_end_exclusive);
   }
 
  private:
@@ -1575,6 +1638,8 @@ void extractPlainIndexedRecords(
     }
   }
 
+  const std::uint64_t file_size = std::filesystem::file_size(std::filesystem::path(file));
+
   PlainIndexedRecordReader reader(file);
   const auto regions = buildDenseRegionsFromSortedUnique(
     local_ids,
@@ -1599,13 +1664,19 @@ void extractPlainIndexedRecords(
     if (dense_region) {
       reader.seekTo(header_offsets[static_cast<size_t>(region_start)]);
       for (std::uint64_t lid = region_start; lid <= region_end; ++lid) {
-        emit(lid, reader.readOne(type, include_qual));
+        const std::uint64_t end_excl =
+          (lid + 1 < header_offsets.size()) ? header_offsets[static_cast<size_t>(lid + 1)] :
+                                                file_size;
+        emit(lid, reader.readOne(type, include_qual, end_excl));
       }
     } else {
       for (auto it = region_begin; it != region_end_it; ++it) {
         const std::uint64_t lid = *it;
         reader.seekTo(header_offsets[static_cast<size_t>(lid)]);
-        emit(lid, reader.readOne(type, include_qual));
+        const std::uint64_t end_excl =
+          (lid + 1 < header_offsets.size()) ? header_offsets[static_cast<size_t>(lid + 1)] :
+                                                file_size;
+        emit(lid, reader.readOne(type, include_qual, end_excl));
       }
     }
   }
@@ -1774,28 +1845,39 @@ std::unique_ptr<PlainIndexedFile> buildPlainFileIndex(const std::string& path, i
     throw std::runtime_error("Could not open plain input for indexing: " + path);
   }
   if (record_size == 2) {
-    // FASTA plain index: record starts are header lines only.
-    std::string line;
+    // FASTA plain index: record starts are header lines only (buffered newline scan).
+    std::vector<char> buffer(kGzBufferSize * 8, '\0');
+    bool sol = true;
     bool saw_header = false;
     bool current_has_seq = false;
+    std::uint64_t file_offset = 0;
     while (true) {
-      const std::streampos pos = in.tellg();
-      if (!std::getline(in, line)) {
+      in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+      const std::streamsize n_read_s = in.gcount();
+      if (n_read_s <= 0) {
         break;
       }
-      if (!line.empty() && line.back() == '\r') {
-        line.pop_back();
-      }
-      if (!line.empty() && line.front() == '>') {
-        if (saw_header && !current_has_seq) {
-          throw std::runtime_error("FASTA record has no sequence lines: " + path);
+      const std::size_t n_read = static_cast<std::size_t>(n_read_s);
+      for (std::size_t i = 0; i < n_read; ++i) {
+        const unsigned char uc = static_cast<unsigned char>(buffer[i]);
+        if (sol) {
+          if (uc == static_cast<unsigned char>('>')) {
+            if (saw_header && !current_has_seq) {
+              throw std::runtime_error("FASTA record has no sequence lines: " + path);
+            }
+            saw_header = true;
+            current_has_seq = false;
+            out->plain_header_byte_offsets.push_back(file_offset + static_cast<std::uint64_t>(i));
+          } else if (saw_header) {
+            current_has_seq = true;
+          }
+          sol = false;
         }
-        saw_header = true;
-        current_has_seq = false;
-        out->plain_header_byte_offsets.push_back(static_cast<std::uint64_t>(pos));
-      } else if (saw_header) {
-        current_has_seq = true;
+        if (uc == static_cast<unsigned char>('\n')) {
+          sol = true;
+        }
       }
+      file_offset += static_cast<std::uint64_t>(n_read);
     }
     if (!saw_header) {
       throw std::runtime_error("FASTA input has no records (no header lines): " + path);

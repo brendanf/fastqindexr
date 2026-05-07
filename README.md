@@ -11,26 +11,51 @@ coverage](https://codecov.io/gh/brendanf/fastqindexr/graph/badge.svg)](https://a
 <!-- badges: end -->
 
 `fastqindexr` builds an in-memory index over one or more FASTA/FASTQ
-files (gzip-compressed or plain), then extracts records by ID without
-scanning from the beginning each time. A single `create_index()` call
-must use one compression type (all gzip or all plain). You can also read
-binary `.fqi` indexes produced by the FastqIndEx CLI and use them the
-same way as in-memory indexes. The package wraps an Rcpp bridge around
-adapted open-source
+files (gzip-compressed or plain), then extracts records by numerical
+index without scanning from the beginning each time. The package wraps
+an Rcpp bridge around adapted open-source
 [FastqIndEx](https://github.com/DKFZ-ODCF/FastqIndEx) C++ core
-components. It is not written or maintained by the authors of
-FastqIndEx.
+components in order to seek to specific records in a gzipped file
+without decompressing the entire file. It can also read binary `.fqi`
+indexes produced by the FastqIndEx CLI. It is not written or maintained
+by the authors of FastqIndEx.
 
-The package is useful when you want to:
+Additional features implemented beyond the capabilities of FastqIndEx:
 
-- repeatedly sample or subset records from large FASTA/FASTQ inputs
-  (gzip or plain)
-- treat several files as one logical concatenated record stream
-- keep records in R as a `data.frame`, a named `list` of `seq_id` /
-  `seq` (and `qual` for FASTQ), or a named character vector of sequences
-  only
-- write selected records directly to a plain or gzip-compressed
-  FASTA/FASTQ file, preserving request order
+- Fast extraction of arbitrary subsets of records, rather than only
+  contiguous ranges.
+- Extraction of records in any order, including duplicates.
+- Multiple file support, where the files are treated as one logical
+  concatenated record stream.
+- Support for FASTA files with multiple sequence lines per record.
+- Support for extracting different subsets of records to multiple
+  outputs (files or R objects) in a single query and a single read
+  through the source file(s).
+- Support for indexing and extracting records from non-gzipped files
+  using the same API.
+- Support for extracting records from source file(s) without building an
+  index first, with only a single scan through the source file(s). This
+  option is useful for one-off extraction where the index build cost is
+  not justified.
+
+Many of these features are also implemented using the
+[`Biostrings`](https://bioconductor.org/packages/Biostrings/) package’s
+`fasta.index()` function. Additional features implemented beyond the
+capabilities of `Biostrings` are:
+
+- Support for indexing and extraction from FASTQ files.
+- Support for extracting records to multiple outputs in a single query.
+- Support for extracting non-contiguous records from a non-indexed
+  source file without reading the entire file in memory.
+- Greatly improved performance for non-contiguous extraction from
+  gzipped files.
+
+Additional features which are present in `Biostrings` but not
+implemented in `fastqindexr` are:
+
+- Extraction of records by text sequence ID or length (or both) rather
+  than numerical index.
+- Extracting subsequences rather than entire records.
 
 ## Installation
 
@@ -85,20 +110,9 @@ unlink(c(path, out))
 
 ## Benchmarking
 
-The [`Biostrings` package from
-Bioconductor](https://bioconductor.org/packages/Biostrings/) also
-provides an implementation of FASTA indexing and extraction via its
-`fasta.index()` function. The indexes produced by `fasta.index()` can be
-subset and supplied as the `file` argument to `readDNAStringSet()` (or
-the equivalent B/RNA/AA versions) to read arbitrary subsets of
-sequences. The `fasta.index()` indexes include more details about the
-sequences, including sequence names and lengths, which may be useful for
-some applications. However, the `readXStringSet()` functions cannot seek
-inside gzipped files, and so they are very slow at random-access
-extraction from gzipped files.
-
-Here is a benchmark comparing the two implementations, for different
-access patterns and compression modes.
+Here is a benchmark comparing extraction of sequences from a file using
+`Biostrings` vs `fastqindexr`, for different access patterns and
+compression modes.
 
 ``` r
 # Install Biostrings if not already installed.
@@ -140,7 +154,7 @@ for (comp in c("gzip", "plain")) {
   }
   tmp <- tempfile(fileext = fileext)
   make_benchmark_fasta(tmp, n = n_records, width = 120)
-  
+
   # loop over implementations (fastqindexr / Biostrings)
   for (impl in c("fastqindexr", "Biostrings")) {
     index_time <- system.time(
@@ -187,22 +201,22 @@ for (comp in c("gzip", "plain")) {
 
 benchmarks
 #>    compression implementation     operation elapsed
-#> 1         gzip    fastqindexr         index   0.011
-#> 2         gzip    fastqindexr    contiguous   0.006
-#> 3         gzip    fastqindexr sorted_unique   0.012
-#> 4         gzip    fastqindexr  unsorted_dup   0.015
-#> 5         gzip     Biostrings         index   0.012
-#> 6         gzip     Biostrings    contiguous   0.010
-#> 7         gzip     Biostrings sorted_unique   5.205
-#> 8         gzip     Biostrings  unsorted_dup   4.765
-#> 9        plain    fastqindexr         index   0.002
-#> 10       plain    fastqindexr    contiguous   0.004
-#> 11       plain    fastqindexr sorted_unique   0.009
-#> 12       plain    fastqindexr  unsorted_dup   0.009
-#> 13       plain     Biostrings         index   0.005
+#> 1         gzip    fastqindexr         index   0.046
+#> 2         gzip    fastqindexr    contiguous   0.012
+#> 3         gzip    fastqindexr sorted_unique   0.019
+#> 4         gzip    fastqindexr  unsorted_dup   0.019
+#> 5         gzip     Biostrings         index   0.010
+#> 6         gzip     Biostrings    contiguous   0.007
+#> 7         gzip     Biostrings sorted_unique   3.847
+#> 8         gzip     Biostrings  unsorted_dup   3.551
+#> 9        plain    fastqindexr         index   0.021
+#> 10       plain    fastqindexr    contiguous   0.016
+#> 11       plain    fastqindexr sorted_unique   0.018
+#> 12       plain    fastqindexr  unsorted_dup   0.017
+#> 13       plain     Biostrings         index   0.004
 #> 14       plain     Biostrings    contiguous   0.003
-#> 15       plain     Biostrings sorted_unique   0.013
-#> 16       plain     Biostrings  unsorted_dup   0.015
+#> 15       plain     Biostrings sorted_unique   0.009
+#> 16       plain     Biostrings  unsorted_dup   0.009
 ```
 
 Although `fastqindexr` supports extracting from both gzipped and plain
@@ -212,15 +226,20 @@ the cases where `Biostrings` struggles the most: when extracting
 
 ``` r
 library(ggplot2)
-benchmarks$operation <- factor(benchmarks$operation,
- levels = c("unsorted_dup", "sorted_unique", "contiguous", "index"))
-ggplot(benchmarks, aes(y = operation, x = elapsed * 1000, fill = implementation)) +
-geom_bar(stat = "identity", position = "dodge") +
-facet_wrap(~ compression, ncol = 1) +
-scale_x_log10(name = "Elapsed (ms)") +
-scale_y_discrete(name = "Operation") +
-theme_minimal() +
-theme(legend.position = "bottom")
+benchmarks$operation <- factor(
+  benchmarks$operation,
+  levels = c("unsorted_dup", "sorted_unique", "contiguous", "index")
+)
+ggplot(
+  benchmarks,
+  aes(y = operation, x = elapsed * 1000, fill = implementation)
+) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~ compression, ncol = 1) +
+  scale_x_log10(name = "Elapsed (ms)") +
+  scale_y_discrete(name = "Operation") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
 ```
 
 <img src="man/figures/README-benchmark-plot-1.png" alt="" width="100%" />
@@ -261,11 +280,13 @@ theme(legend.position = "bottom")
     may buffer all unique records like `extract_sequences()`
 - `make_benchmark_fasta(path, n = 5000, width = 80)`
   - writes synthetic gzipped FASTA for repeatable benchmark setup
+- `make_benchmark_fastq(path, n = 5000, width = 80)`
+  - writes synthetic gzipped FASTQ for repeatable benchmark setup
 
 ## Important format assumptions
 
-- FASTA support currently assumes one sequence line per record (header
-  line + one sequence line)
+- FASTA records are header-driven (`>` starts a record); sequence may
+  span multiple lines
 - files are treated as a logical concatenated stream in the order
   supplied to `create_index()`
 - if files move after indexing, you can provide replacement paths via

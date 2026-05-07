@@ -1,5 +1,5 @@
 # fastqindexr benchmark snapshot: extract_to_file_vs_list_benchmark
-# git: 638acca0c3881e75c91c1ac3ab846754043c0c28
+# git: 02f2122a2d75fc033f46cce5d47f78297e0a2171
 # R: R version 4.4.3 (2025-02-28)
 ---
 
@@ -7,11 +7,11 @@
 [benchmark]
 FASTA: build index
 case: fasta/index
-elapsed_s: 0.044
+elapsed_s: 0.045
 case: fasta/direct_to_file
-elapsed_s: 0.015
+elapsed_s: 0.016
 case: fasta/list_then_write
-elapsed_s: 0.036
+elapsed_s: 0.039
 size_direct_bytes: 262000
 size_list_bytes: 262000
 outputs_match: TRUE
@@ -21,9 +21,9 @@ FASTQ: build index
 case: fastq/index
 elapsed_s: 0.080
 case: fastq/direct_to_file
-elapsed_s: 0.105
+elapsed_s: 0.102
 case: fastq/list_then_write
-elapsed_s: 0.069
+elapsed_s: 0.070
 size_direct_bytes: 508000
 size_list_bytes: 508000
 outputs_match: TRUE

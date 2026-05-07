@@ -1,10 +1,10 @@
 # fastqindexr benchmark snapshot: biostrings_fasta_index_benchmark
-# git: 638acca0c3881e75c91c1ac3ab846754043c0c28
+# git: 02f2122a2d75fc033f46cce5d47f78297e0a2171
 # R: R version 4.4.3 (2025-02-28)
 ---
 
 case: gzip/fastqindexr/index
-elapsed_s: 0.046
+elapsed_s: 0.045
 case: gzip/fastqindexr/contiguous
 elapsed_s: 0.012
 n_records_out: 2000
@@ -12,38 +12,38 @@ case: gzip/fastqindexr/sorted_unique
 elapsed_s: 0.066
 n_records_out: 2000
 case: gzip/fastqindexr/unsorted_dup
-elapsed_s: 0.019
+elapsed_s: 0.018
 n_records_out: 2000
 case: gzip/Biostrings/index
-elapsed_s: 0.011
+elapsed_s: 0.010
 case: gzip/Biostrings/contiguous
-elapsed_s: 0.018
+elapsed_s: 0.019
 n_records_out: 2000
 case: gzip/Biostrings/sorted_unique
 elapsed_s: 3.858
 n_records_out: 2000
 case: gzip/Biostrings/unsorted_dup
-elapsed_s: 3.559
+elapsed_s: 3.542
 n_records_out: 2000
 case: plain/fastqindexr/index
-elapsed_s: 0.024
+elapsed_s: 0.011
 case: plain/fastqindexr/contiguous
-elapsed_s: 0.016
+elapsed_s: 0.014
 n_records_out: 2000
 case: plain/fastqindexr/sorted_unique
 elapsed_s: 0.019
 n_records_out: 2000
 case: plain/fastqindexr/unsorted_dup
-elapsed_s: 0.018
+elapsed_s: 0.017
 n_records_out: 2000
 case: plain/Biostrings/index
 elapsed_s: 0.004
 case: plain/Biostrings/contiguous
-elapsed_s: 0.003
+elapsed_s: 0.002
 n_records_out: 2000
 case: plain/Biostrings/sorted_unique
 elapsed_s: 0.009
 n_records_out: 2000
 case: plain/Biostrings/unsorted_dup
-elapsed_s: 0.009
+elapsed_s: 0.008
 n_records_out: 2000
