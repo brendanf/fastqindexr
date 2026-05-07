@@ -52,6 +52,21 @@ zlib. Defaults to \code{endsWith(tolower(outfile), ".gz")}.}
 \code{FALSE} (default), wrapped sequence lines from input FASTA are preserved in
 extracted sequence text; when \code{TRUE}, wrapped lines are concatenated into a
 single line per record.}
+
+\item{mode}{\code{"auto"} uses index-backed extraction when \code{index} is non-\code{NULL}
+and \code{getOption("fastqindexr.extract_mode", "indexed")} is \code{"indexed"};
+otherwise (no index, or option \code{"sequential"}) reads by streaming scans.
+\code{"indexed"} requires \code{index} and offset-based I/O. \code{"sequential"} always
+streams and does not require a live native index pointer (works with
+\code{index} fields after \code{\link[=readRDS]{readRDS()}} if paths remain valid).}
+
+\item{input_type}{When \code{index} is \code{NULL}, passed to format detection:
+\code{"auto"}, \code{"fasta"}, or \code{"fastq"}. Ignored when \code{index} is provided.}
+
+\item{renumber}{Renames emitted \code{seq_id} / FASTA headers: \code{"none"},
+\code{"zero_based"}, or \code{"one_based"} (output order positions). For
+non-\code{"none"} values, extraction is routed through \code{\link[=extract_sequences]{extract_sequences()}}
+before writing.}
 }
 \value{
 Invisibly returns \code{outfile}.

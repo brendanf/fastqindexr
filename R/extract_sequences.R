@@ -668,6 +668,18 @@ extract_sequences <- function(
 #'   `FALSE` (default), wrapped sequence lines from input FASTA are preserved in
 #'   extracted sequence text; when `TRUE`, wrapped lines are concatenated into a
 #'   single line per record.
+#' @param mode `"auto"` uses index-backed extraction when `index` is non-`NULL`
+#'   and `getOption("fastqindexr.extract_mode", "indexed")` is `"indexed"`;
+#'   otherwise (no index, or option `"sequential"`) reads by streaming scans.
+#'   `"indexed"` requires `index` and offset-based I/O. `"sequential"` always
+#'   streams and does not require a live native index pointer (works with
+#'   `index` fields after [readRDS()] if paths remain valid).
+#' @param input_type When `index` is `NULL`, passed to format detection:
+#'   `"auto"`, `"fasta"`, or `"fastq"`. Ignored when `index` is provided.
+#' @param renumber Renames emitted `seq_id` / FASTA headers: `"none"`,
+#'   `"zero_based"`, or `"one_based"` (output order positions). For
+#'   non-`"none"` values, extraction is routed through [extract_sequences()]
+#'   before writing.
 #'
 #' @return Invisibly returns `outfile`.
 #'
@@ -1102,6 +1114,14 @@ extract_sequences_to_file <- function(
 #'   chunk when building the return object. Larger values may reduce overhead
 #'   but increase temporary memory usage. Must be a finite positive number (not
 #'   `NA`, not `Inf`).
+#' @param mode `"auto"` uses index-backed extraction when `index` is non-`NULL`
+#'   and `getOption("fastqindexr.extract_mode", "indexed")` is `"indexed"`;
+#'   otherwise (no index, or option `"sequential"`) reads by streaming scans.
+#'   `"indexed"` requires `index` and offset-based I/O. `"sequential"` always
+#'   streams and does not require a live native index pointer (works with
+#'   `index` fields after [readRDS()] if paths remain valid).
+#' @param type When `index` is `NULL`, passed to format detection: `"auto"`,
+#'   `"fasta"`, or `"fastq"`. Ignored when `index` is provided.
 #'
 #' @return A `Biostrings::DNAStringSet`.
 #'

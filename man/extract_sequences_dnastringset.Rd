@@ -31,6 +31,16 @@ IDs, \code{"zero_based"} uses \code{"0"}, \code{"1"}, ..., and \code{"one_based"
 chunk when building the return object. Larger values may reduce overhead
 but increase temporary memory usage. Must be a finite positive number (not
 \code{NA}, not \code{Inf}).}
+
+\item{mode}{\code{"auto"} uses index-backed extraction when \code{index} is non-\code{NULL}
+and \code{getOption("fastqindexr.extract_mode", "indexed")} is \code{"indexed"};
+otherwise (no index, or option \code{"sequential"}) reads by streaming scans.
+\code{"indexed"} requires \code{index} and offset-based I/O. \code{"sequential"} always
+streams and does not require a live native index pointer (works with
+\code{index} fields after \code{\link[=readRDS]{readRDS()}} if paths remain valid).}
+
+\item{type}{When \code{index} is \code{NULL}, passed to format detection: \code{"auto"},
+\code{"fasta"}, or \code{"fastq"}. Ignored when \code{index} is provided.}
 }
 \value{
 A \code{Biostrings::DNAStringSet}.

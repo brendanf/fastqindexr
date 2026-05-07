@@ -7,3 +7,4 @@
 ^\.Rproj\.user$
 ^\.github$
 ^tests/benchmarks/cache/
+^AGENTS.md$
