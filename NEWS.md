@@ -1,4 +1,4 @@
-# fastqindexr (development version)
+# fastqindexr 0.1.0
 
 - Add extraction `mode = c("auto", "indexed", "sequential")` across
   `extract_sequences()`, `extract_sequences_to_file()`, and
@@ -29,6 +29,17 @@
   `fastqindexr.max_bridge_gap` / `fastqindexr.max_region_records`,
   and fixes for some FastqIndEx `.fqi` reads and repeated small
   extractions with reused indexes.
+- Support **multi-line FASTA sequences** for both gzip and plain inputs
+  across indexed extraction, sequential extraction, and file output.
+- Add `collapse_sequence_lines` to `extract_sequences_to_file()` for
+  FASTA output, allowing sequence lines to be emitted either with their
+  original line breaks (default) or collapsed to a single line.
+- Improve plain-file FASTA performance via offset-bounded indexed reads
+  and lower-overhead sequential parsing for skipped records.
+- Extend benchmark helpers with `make_benchmark_fastq()` alongside
+  `make_benchmark_fasta()` for synthetic FASTQ generation.
+- Update serialized index payload handling to support schema version 5
+  (while still restoring schema version 4 payloads).
 
 ## 0.0.2
 
