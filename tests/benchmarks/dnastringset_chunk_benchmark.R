@@ -6,6 +6,11 @@ if (!requireNamespace("Biostrings", quietly = TRUE)) {
 
 pkgload::load_all(".", quiet = TRUE)
 
+source(file.path("tests", "benchmarks", "benchmark_sink.R"))
+bench_sink_start("dnastringset_chunk_benchmark")
+on.exit(bench_sink_stop(), add = TRUE)
+
+
 estimate_mem_mb <- function(expr) {
   gc(reset = TRUE)
   before <- sum(gc()[, 2L])
@@ -28,8 +33,8 @@ extract_via_tempfile <- function(index, ids) {
 }
 
 run_case <- function(case_name, idx, ids) {
-  cat("\n==", case_name, "==\n")
-  cat("records:", length(ids), "\n")
+  cat(sprintf("\n[benchmark]\n%s\n", case_name))
+  cat(sprintf("records: %d\n", length(ids)))
 
   t_chunk <- system.time({
     chunk <- estimate_mem_mb(extract_sequences_dnastringset(
@@ -38,26 +43,18 @@ run_case <- function(case_name, idx, ids) {
       renumber = "none"
     ))
   })
-  cat(
-    sprintf(
-      "Option D (chunked):  elapsed=%.3fs mem_delta=%.1fMB n=%d\n",
-      t_chunk[["elapsed"]],
-      chunk$mem_mb,
-      length(chunk$value)
-    )
-  )
+  cat("method: chunked\n")
+  cat(sprintf("elapsed_s: %.3f\n", t_chunk[["elapsed"]]))
+  cat(sprintf("mem_delta_mb: %.1f\n", chunk$mem_mb))
+  cat(sprintf("n_records_out: %d\n", length(chunk$value)))
 
   t_tmp <- system.time({
     tmp <- estimate_mem_mb(extract_via_tempfile(idx, ids))
   })
-  cat(
-    sprintf(
-      "Option A (tempfile): elapsed=%.3fs mem_delta=%.1fMB n=%d\n",
-      t_tmp[["elapsed"]],
-      tmp$mem_mb,
-      length(tmp$value)
-    )
-  )
+  cat("method: tempfile\n")
+  cat(sprintf("elapsed_s: %.3f\n", t_tmp[["elapsed"]]))
+  cat(sprintf("mem_delta_mb: %.1f\n", tmp$mem_mb))
+  cat(sprintf("n_records_out: %d\n", length(tmp$value)))
 
   stopifnot(identical(as.character(chunk$value), as.character(tmp$value)))
   invisible(NULL)
@@ -76,15 +73,16 @@ ids_ordered <- seq_len(1000000L)
 ids_random_dup <- sample.int(1200000L, 1000000L, replace = TRUE)
 ids_cross_boundary <- c(119990:120000, 120001:120050, 200000, 199999, 120001)
 
-run_case("single file ordered", idx_single, ids_ordered)
-run_case("single file random with duplicates", idx_single, ids_random_dup)
-run_case("multi-file boundary crossing", idx_multi, ids_cross_boundary)
+run_case("FASTA/single file ordered", idx_single, ids_ordered)
+run_case("FASTA/single file random with duplicates", idx_single, ids_random_dup)
+run_case("FASTA/multi-file boundary crossing", idx_multi, ids_cross_boundary)
 
-cat("\nChunk-size sensitivity (characters target)\n")
+cat("\n[benchmark]\nFASTA/chunk-size sensitivity\n")
+idx_sense <- create_index(tmp1, type = "fasta")
 for (target in c(1e6, 5e6, 1e7, 5e7, 1e8)) {
-  idx_sense <- create_index(tmp1, type = "fasta")
   out <- tryCatch(
     {
+      cat(sprintf("chunk size=%g chars n=%d\n", target, length(ids_ordered)))
       t <- system.time({
         x <- extract_sequences_dnastringset(
           idx_sense,
@@ -93,16 +91,36 @@ for (target in c(1e6, 5e6, 1e7, 5e7, 1e8)) {
           chunk_chars = target
         )
       })
-      sprintf(
-        "target=%g chars elapsed=%.3fs n=%d",
-        target,
-        t[["elapsed"]],
-        length(x)
-      )
+      if (length(x) != length(ids_ordered)) {
+        stop(
+          "Extraction returned ",
+          length(x),
+          " instead of ",
+          length(ids_ordered),
+          " records.",
+          call. = FALSE
+        )
+      }
+      cat(sprintf("elapsed=%.3fs\n", t[["elapsed"]]))
     },
     error = function(e) {
-      sprintf("target=%g chars ERROR: %s", target, conditionMessage(e))
+      cat(sprintf("target=%g chars ERROR: %s\n", target, conditionMessage(e)))
     }
   )
-  cat(out, "\n")
 }
+
+tmpq1 <- tempfile(fileext = ".fq.gz")
+tmpq2 <- tempfile(fileext = ".fq.gz")
+on.exit(unlink(c(tmpq1, tmpq2)), add = TRUE)
+make_benchmark_fastq(tmpq1, n = 1200000L, width = 80L)
+make_benchmark_fastq(tmpq2, n = 80000L, width = 120L)
+idxq_single <- create_index(tmpq1, type = "fastq")
+idxq_multi <- create_index(c(tmpq1, tmpq2), type = "fastq")
+
+run_case("FASTQ/single file ordered", idxq_single, ids_ordered)
+run_case(
+  "FASTQ/single file random with duplicates",
+  idxq_single,
+  ids_random_dup
+)
+run_case("FASTQ/multi-file boundary crossing", idxq_multi, ids_cross_boundary)

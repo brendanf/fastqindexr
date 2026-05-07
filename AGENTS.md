@@ -16,9 +16,11 @@ This note is for future work in this repository (humans and coding agents). It c
 4. **Multiple files = one logical stream** for ID purposes: `create_index(c(f1, f2, ...))` assigns **global** record IDs in order; `file_record_offsets` in the index list defines which global IDs belong to which file.
 5. **Output order = input order:** `extract_sequences(index, ids = c(3, 1, 3, ...))` returns rows in **that** order, including duplicates.
 6. **Performance idea:** extraction batches requests into **dense regions** (see `kDenseGap` in `src/fastqindexr.cpp`) to reduce seek/decompression work, then reorders to the caller’s ID order.
-7. **Known FASTA limitation (documented in Roxygen):** extraction assumes **one sequence line per FASTA record** (header + one line of sequence). Multi-line sequence blocks are not the target use case in the current implementation.
-8. **Resilience:** if indexed random access fails for a region, the bridge can fall back to a **sequential** gzip parse for that file (see comments in `src/fastqindexr.cpp`).
+7. **FASTA records:** logical records begin at header lines (`>`). Sequence may span multiple physical lines in plain or gzip FASTA; gzip extraction uses line-granular reads plus assembly in `src/fastqindexr.cpp` (vendored core stays line-oriented).
+8. **Fail-fast:** avoid using fallbacks to produce correct output even when optimized routines fail, as this can hide implementation problems in the optimized path. Instead, fail cleanly with a descriptive error.
 9. **Single vendored tree only:** keep **one** FastqIndEx-derived source tree under `src/fastqindex_core/`. For new features, merge required upstream files into this tree (and reconcile same-name files there) instead of creating parallel vendored trees like `src/*_io` or `src/*_core2`.
+10. **In-memory extraction for in-memory outputs:** implementation of methods which extract sequences and produce R objects should avoid unnecessary disk access.  Temporary files in particular should not be used.
+11. **Low memory overhead:** Extraction methods typically produce outputs as either R objects or files on disk. Large intermediate memory allocations of C++ objects which are not visible to R, or of intermediate R objects, should be avoided.
 
 ## Code layout (where to look)
 
@@ -33,6 +35,7 @@ This note is for future work in this repository (humans and coding agents). It c
 | `inst/LICENSE.note` | Upstream reference commit + list of vendored files + high-level change notes |
 | `src/fastqindex_core/README.md` | Shorter note on layout and the bridge; keep in sync when the file set changes |
 | `tests/testthat/` | Correctness tests; `tests/benchmarks/` for optional Biostrings comparisons |
+| `tests/benchmarks/results/` | Small **committed** benchmark snapshots (`*.txt`) for regression diffing (see below) |
 
 Internal helpers `validate_input_files` / `validate_index` are **`@noRd`**: not part of the public API.
 
@@ -82,6 +85,23 @@ roxygen2::roxygenize()
 ```
 
 For a full sanity check: `R CMD build .` then `R CMD check` on the tarball.
+
+## Benchmark snapshots (`tests/benchmarks/`)
+
+Optional scripts under `tests/benchmarks/` load the package via `pkgload::load_all()` (from the package root) and should be run **after a clean rebuild** so timings are not skewed by stale objects or accidental debug-only compiler flags.
+
+**Clean rebuild before benchmarking**
+
+1. From the package root, remove stale compilation artifacts, for example:
+   - `pkgbuild::clean_dll()` in R, and/or
+   - `rm -f src/*.o src/fastqindexr.so` (exact names depend on platform).
+2. Recompile with the **same** `PKG_CFLAGS` / `PKG_CXXFLAGS` you intend to compare (see `file.path(R.home("etc"), "Makeconf")` for defaults). For apples-to-apples regressions, avoid unintentionally enabling heavy debug flags (for example `-g`, `-fno-omit-frame-pointer`) in local `~/.R/Makevars` unless you mean to measure that configuration.
+
+**Recording results**
+
+Each script sources `tests/benchmarks/benchmark_sink.R` and writes a stable summary to `tests/benchmarks/results/<script_basename>.txt` (git SHA and `R.version.string` prefix + tee’d console lines). Commit those files when you intentionally refresh the baseline; use `git diff` on `tests/benchmarks/results/` to spot performance regressions after code changes.
+
+Some scripts require **Biostrings** (see script headers).
 
 ---
 

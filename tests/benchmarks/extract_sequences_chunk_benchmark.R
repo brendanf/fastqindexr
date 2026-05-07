@@ -12,6 +12,10 @@
 
 pkgload::load_all(".", quiet = TRUE)
 
+source(file.path("tests", "benchmarks", "benchmark_sink.R"))
+bench_sink_start("extract_sequences_chunk_benchmark")
+on.exit(bench_sink_stop(), add = TRUE)
+
 bench_cache_file <- function(name) {
   cache_dir <- file.path("tests", "benchmarks", "cache")
   if (!dir.exists(cache_dir)) {
@@ -37,14 +41,13 @@ bench_case <- function(label, idx, ids, return = "data.frame", mode = "auto") {
       diag$fallback_records
     )
   }
-  cat(sprintf(
-    "%s return=%s elapsed=%.3fs n=%d%s\n",
-    label,
-    return,
-    t[["elapsed"]],
-    length(ids),
-    diag_txt
-  ))
+  cat(sprintf("case: %s\n", label))
+  cat(sprintf("    return: %s\n", return))
+  cat(sprintf("    elapsed_s: %.3f\n", t[["elapsed"]]))
+  cat(sprintf("    n_ids: %d\n", length(ids)))
+  if (nzchar(diag_txt)) {
+    cat(sprintf("    diagnostics:%s\n", diag_txt))
+  }
   invisible(out)
 }
 
@@ -130,13 +133,13 @@ if (!file.exists(tmp_plain)) {
 }
 idx_plain <- create_index(tmp_plain, type = "fasta")
 
-cat("extract_sequences chunked-unique backend benchmark\n")
+bench_log_header("FASTA: extract_sequences chunked backend benchmark")
 
 ordered_unique <- seq_len(300000L)
 bench_with_tuning("ordered_unique/default", idx, ordered_unique, "data.frame")
 bench_with_tuning("ordered_unique/default", idx, ordered_unique, "seq")
 
-cat("execution-mode baseline comparison\n")
+bench_log_header("FASTA: execution-mode baseline comparison")
 set.seed(21L)
 bench_mode_compare(
   idx,
@@ -156,7 +159,7 @@ tuning_grid <- expand.grid(
   stringsAsFactors = FALSE
 )
 
-cat("region-merge matrix (bridge x max_region_records)\n")
+bench_log_header("FASTA: region-merge matrix (bridge x max_region_records)")
 
 set.seed(13L)
 bench_region_matrix(
@@ -219,10 +222,63 @@ perm_unique <- sample.int(1000000L, 300000L, replace = FALSE)
 bench_with_tuning("permuted_unique/default", idx, perm_unique, "data.frame")
 bench_with_tuning("permuted_unique/default", idx, perm_unique, "seq")
 
-cat("plain FASTA mode comparison\n")
+bench_log_header("FASTA plain: mode comparison")
 set.seed(23L)
 bench_mode_compare(
   idx_plain,
   "plain_mode_compare_perm1000",
   sample.int(1000000L, 1000L, replace = FALSE)
+)
+
+tmp_q <- bench_cache_file("benchmark_1m_w600.fq.gz")
+if (!file.exists(tmp_q)) {
+  make_benchmark_fastq(tmp_q, n = 1000000L, width = 600L)
+}
+idx_q <- create_index(tmp_q, type = "fastq")
+
+bench_log_header("FASTQ: extract_sequences chunked backend benchmark")
+bench_with_tuning(
+  "fastq/ordered_unique/default",
+  idx_q,
+  ordered_unique,
+  "data.frame"
+)
+bench_with_tuning("fastq/ordered_unique/default", idx_q, ordered_unique, "seq")
+
+bench_log_header("FASTQ: execution-mode baseline comparison")
+set.seed(31L)
+bench_mode_compare(
+  idx_q,
+  "fastq/mode_compare_perm10",
+  sample.int(1000000L, 10L, replace = FALSE)
+)
+set.seed(32L)
+bench_mode_compare(
+  idx_q,
+  "fastq/mode_compare_perm1000",
+  sample.int(1000000L, 1000L, replace = FALSE)
+)
+
+bench_log_header("FASTQ: region-merge matrix")
+set.seed(41L)
+bench_region_matrix(
+  idx_q,
+  "fastq/matrix_perm10k",
+  sample.int(1000000L, 10000L, replace = FALSE),
+  tuning_grid
+)
+
+set.seed(42L)
+random_dup_q <- sample.int(1000000L, 300000L, replace = TRUE)
+bench_with_tuning(
+  "fastq/random_with_replacement/default",
+  idx_q,
+  random_dup_q,
+  "data.frame"
+)
+bench_with_tuning(
+  "fastq/random_with_replacement/default",
+  idx_q,
+  random_dup_q,
+  "seq"
 )

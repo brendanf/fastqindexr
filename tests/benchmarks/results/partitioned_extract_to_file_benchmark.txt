@@ -1,0 +1,131 @@
+# fastqindexr benchmark snapshot: partitioned_extract_to_file_benchmark
+# git: 49ea40872a44d2396586361c4986a1d048c565fd
+# R: R version 4.4.3 (2025-02-28)
+---
+
+using cached test sequences
+
+[benchmark]
+FASTA: partitioned strict-increasing extraction benchmark
+case: fasta/contiguous-8/default
+elapsed_s: 2.521
+case: fasta/round_robin-8/default
+elapsed_s: 2.294
+
+[benchmark]
+FASTA: execution-mode baseline comparison
+case: fasta/mode_compare_contiguous-8 mode=indexed
+elapsed_s: 2.047
+case: fasta/mode_compare_contiguous-8 mode=sequential
+elapsed_s: 1.888
+case: fasta/mode_compare_round_robin-8 mode=indexed
+elapsed_s: 2.045
+case: fasta/mode_compare_round_robin-8 mode=sequential
+elapsed_s: 1.843
+
+[benchmark]
+FASTA plain: execution-mode baseline comparison
+case: fasta_plain/mode_compare_contiguous-8 mode=indexed
+elapsed_s: 1.701
+case: fasta_plain/mode_compare_contiguous-8 mode=sequential
+elapsed_s: 1.711
+case: fasta_plain/mode_compare_round_robin-8 mode=indexed
+elapsed_s: 1.660
+case: fasta_plain/mode_compare_round_robin-8 mode=sequential
+elapsed_s: 1.787
+
+[benchmark]
+FASTA: region-merge matrix (contiguous vs round_robin)
+case: fasta/matrix_contig-8 mode=indexed b=0 r=500000
+elapsed_s: 2.000
+case: fasta/matrix_contig-8 mode=indexed b=64 r=500000
+elapsed_s: 2.001
+case: fasta/matrix_contig-8 mode=indexed b=256 r=500000
+elapsed_s: 2.057
+case: fasta/matrix_contig-8 mode=indexed b=0 r=2000000
+elapsed_s: 2.015
+case: fasta/matrix_contig-8 mode=indexed b=64 r=2000000
+elapsed_s: 2.023
+case: fasta/matrix_contig-8 mode=indexed b=256 r=2000000
+elapsed_s: 2.130
+case: fasta/matrix_contig-8 mode=indexed b=0 r=2147483647
+elapsed_s: 2.025
+case: fasta/matrix_contig-8 mode=indexed b=64 r=2147483647
+elapsed_s: 2.040
+case: fasta/matrix_contig-8 mode=indexed b=256 r=2147483647
+elapsed_s: 2.131
+case: fasta/matrix_rr-8 mode=indexed b=0 r=500000
+elapsed_s: 2.015
+case: fasta/matrix_rr-8 mode=indexed b=64 r=500000
+elapsed_s: 2.054
+case: fasta/matrix_rr-8 mode=indexed b=256 r=500000
+elapsed_s: 2.096
+case: fasta/matrix_rr-8 mode=indexed b=0 r=2000000
+elapsed_s: 2.029
+case: fasta/matrix_rr-8 mode=indexed b=64 r=2000000
+elapsed_s: 2.048
+case: fasta/matrix_rr-8 mode=indexed b=256 r=2000000
+elapsed_s: 2.240
+case: fasta/matrix_rr-8 mode=indexed b=0 r=2147483647
+elapsed_s: 2.040
+case: fasta/matrix_rr-8 mode=indexed b=64 r=2147483647
+elapsed_s: 2.046
+case: fasta/matrix_rr-8 mode=indexed b=256 r=2147483647
+elapsed_s: 2.117
+
+[benchmark]
+FASTQ: partitioned strict-increasing extraction benchmark
+case: fastq/contiguous-8/default
+elapsed_s: 3.042
+case: fastq/round_robin-8/default
+elapsed_s: 2.873
+
+[benchmark]
+FASTQ: execution-mode baseline comparison
+case: fastq/mode_compare_contiguous-8 mode=indexed
+elapsed_s: 2.779
+case: fastq/mode_compare_contiguous-8 mode=sequential
+elapsed_s: 2.574
+case: fastq/mode_compare_round_robin-8 mode=indexed
+elapsed_s: 2.797
+case: fastq/mode_compare_round_robin-8 mode=sequential
+elapsed_s: 2.537
+
+[benchmark]
+FASTQ: region-merge matrix (contiguous vs round_robin)
+case: fastq/matrix_contig-8 mode=indexed b=0 r=500000
+elapsed_s: 2.869
+case: fastq/matrix_contig-8 mode=indexed b=64 r=500000
+elapsed_s: 2.900
+case: fastq/matrix_contig-8 mode=indexed b=256 r=500000
+elapsed_s: 2.810
+case: fastq/matrix_contig-8 mode=indexed b=0 r=2000000
+elapsed_s: 2.900
+case: fastq/matrix_contig-8 mode=indexed b=64 r=2000000
+elapsed_s: 2.808
+case: fastq/matrix_contig-8 mode=indexed b=256 r=2000000
+elapsed_s: 2.835
+case: fastq/matrix_contig-8 mode=indexed b=0 r=2147483647
+elapsed_s: 2.879
+case: fastq/matrix_contig-8 mode=indexed b=64 r=2147483647
+elapsed_s: 2.778
+case: fastq/matrix_contig-8 mode=indexed b=256 r=2147483647
+elapsed_s: 2.945
+case: fastq/matrix_rr-8 mode=indexed b=0 r=500000
+elapsed_s: 2.819
+case: fastq/matrix_rr-8 mode=indexed b=64 r=500000
+elapsed_s: 2.905
+case: fastq/matrix_rr-8 mode=indexed b=256 r=500000
+elapsed_s: 2.817
+case: fastq/matrix_rr-8 mode=indexed b=0 r=2000000
+elapsed_s: 2.904
+case: fastq/matrix_rr-8 mode=indexed b=64 r=2000000
+elapsed_s: 2.818
+case: fastq/matrix_rr-8 mode=indexed b=256 r=2000000
+elapsed_s: 2.891
+case: fastq/matrix_rr-8 mode=indexed b=0 r=2147483647
+elapsed_s: 2.896
+case: fastq/matrix_rr-8 mode=indexed b=64 r=2147483647
+elapsed_s: 2.825
+case: fastq/matrix_rr-8 mode=indexed b=256 r=2147483647
+elapsed_s: 2.893

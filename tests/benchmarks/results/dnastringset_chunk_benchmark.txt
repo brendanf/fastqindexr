@@ -1,0 +1,90 @@
+# fastqindexr benchmark snapshot: dnastringset_chunk_benchmark
+# git: 49ea40872a44d2396586361c4986a1d048c565fd
+# R: R version 4.4.3 (2025-02-28)
+---
+
+
+[benchmark]
+FASTA/single file ordered
+records: 1000000
+method: chunked
+elapsed_s: 5.500
+mem_delta_mb: 172.6
+n_records_out: 1000000
+method: tempfile
+elapsed_s: 5.014
+mem_delta_mb: 96.0
+n_records_out: 1000000
+
+[benchmark]
+FASTA/single file random with duplicates
+records: 1000000
+method: chunked
+elapsed_s: 4.997
+mem_delta_mb: 142.1
+n_records_out: 1000000
+method: tempfile
+elapsed_s: 5.384
+mem_delta_mb: 95.5
+n_records_out: 1000000
+
+[benchmark]
+FASTA/multi-file boundary crossing
+records: 64
+method: chunked
+elapsed_s: 0.528
+mem_delta_mb: 0.0
+n_records_out: 64
+method: tempfile
+elapsed_s: 0.501
+mem_delta_mb: 0.0
+n_records_out: 64
+
+[benchmark]
+FASTA/chunk-size sensitivity
+chunk size=1e+06 chars n=1000000
+elapsed=3.991s
+chunk size=5e+06 chars n=1000000
+elapsed=4.311s
+chunk size=1e+07 chars n=1000000
+elapsed=4.144s
+chunk size=5e+07 chars n=1000000
+elapsed=4.276s
+chunk size=1e+08 chars n=1000000
+elapsed=4.698s
+
+[benchmark]
+FASTQ/single file ordered
+records: 1000000
+method: chunked
+elapsed_s: 7.183
+mem_delta_mb: 95.3
+n_records_out: 1000000
+method: tempfile
+elapsed_s: 6.791
+mem_delta_mb: 95.5
+n_records_out: 1000000
+
+[benchmark]
+FASTQ/single file random with duplicates
+records: 1000000
+method: chunked
+elapsed_s: 6.647
+mem_delta_mb: 103.2
+n_records_out: 1000000
+method: tempfile
+elapsed_s: 6.735
+mem_delta_mb: 95.3
+n_records_out: 1000000
+
+[benchmark]
+FASTQ/multi-file boundary crossing
+records: 64
+method: chunked
+elapsed_s: 0.584
+mem_delta_mb: 0.0
+n_records_out: 64
+method: tempfile
+elapsed_s: 0.582
+mem_delta_mb: 0.1
+n_records_out: 64
