@@ -6,10 +6,7 @@ test_that("extract_sequences_to_file writes FASTA and preserves order", {
 
   returned <- extract_sequences_to_file(idx, c(3, 1, 3), outfile = out_path)
 
-  expect_identical(
-    returned,
-    normalizePath(out_path, winslash = "/", mustWork = FALSE)
-  )
+  expect_same_paths(returned, out_path)
   expect_equal(
     readLines(out_path, warn = FALSE),
     c(">seq3", "GGGG", ">seq1", "AAAA", ">seq3", "GGGG")
@@ -179,10 +176,7 @@ test_that("extract_sequences_to_file supports partitioned seq_idx and outfiles",
     seq_idx = list(c(3, 1, 3), c(2, 4)),
     outfile = c(out1, out2)
   )
-  expect_equal(
-    returned,
-    normalizePath(c(out1, out2), winslash = "/", mustWork = FALSE)
-  )
+  expect_same_paths(returned, c(out1, out2))
   expect_equal(
     readLines(out1, warn = FALSE),
     c(">seq3", "GGGG", ">seq1", "AAAA", ">seq3", "GGGG")

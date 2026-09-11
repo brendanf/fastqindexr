@@ -119,6 +119,16 @@ create_empty_extract_file <- function(path, compress) {
   close(con)
 }
 
+#' Canonicalize output paths after files have been written.
+#'
+#' `normalizePath(..., mustWork = FALSE)` before create/write can keep
+#' platform aliases (Windows 8.3 names, macOS `/var` vs `/private/var`).
+#'
+#' @noRd
+normalize_written_outfiles <- function(outfile) {
+  normalizePath(outfile, winslash = "/", mustWork = FALSE)
+}
+
 #' @noRd
 write_sequences_df_to_file <- function(
   df,
@@ -783,7 +793,6 @@ extract_sequences_to_file <- function(
       } else {
         compress
       }
-      out_norm <- normalizePath(outfile, winslash = "/", mustWork = FALSE)
       for (i in seq_along(seq_idx)) {
         ids_i <- seq_idx[[i]]
         if (length(ids_i) < 1L) {
@@ -814,14 +823,10 @@ extract_sequences_to_file <- function(
           append
         )
       }
-      return(invisible(out_norm))
+      return(invisible(normalize_written_outfiles(outfile)))
     }
     if (length(seq_idx) < 1L) {
-      return(invisible(normalizePath(
-        outfile,
-        winslash = "/",
-        mustWork = FALSE
-      )))
+      return(invisible(normalize_written_outfiles(outfile)))
     }
     validate_seq_idx(seq_idx, n_records)
     df <- extract_sequences(
@@ -838,7 +843,7 @@ extract_sequences_to_file <- function(
       stop("Cannot emit FASTQ output from FASTA input.", call. = FALSE)
     }
     write_sequences_df_to_file(df, outfile, resolved_type, compress, append)
-    return(invisible(normalizePath(outfile, winslash = "/", mustWork = FALSE)))
+    return(invisible(normalize_written_outfiles(outfile)))
   }
 
   live_index <- if (!use_streaming && has_index) {
@@ -880,7 +885,6 @@ extract_sequences_to_file <- function(
     } else {
       compress
     }
-    out_norm <- normalizePath(outfile, winslash = "/", mustWork = FALSE)
     validated_parts <- vector("list", length(seq_idx))
     all_strict_increasing <- TRUE
     any_ids <- FALSE
@@ -985,6 +989,7 @@ extract_sequences_to_file <- function(
         cat(rendered[as.character(ids_i)], file = con, sep = "")
         close(con)
       }
+      out_norm <- normalize_written_outfiles(outfile)
       if (isTRUE(tuning$diagnostics)) {
         attr(out_norm, "fastqindexr_diagnostics") <- attr(
           merged,
@@ -995,6 +1000,7 @@ extract_sequences_to_file <- function(
       return(invisible(out_norm))
     }
 
+    last_diag <- NULL
     for (i in seq_along(validated_parts)) {
       ids_i <- validated_parts[[i]]
       if (length(ids_i) < 1L) {
@@ -1034,12 +1040,16 @@ extract_sequences_to_file <- function(
         )
       }
       if (isTRUE(tuning$diagnostics)) {
-        attr(out_norm, "fastqindexr_diagnostics") <- attr(
-          res,
-          "fastqindexr_diagnostics",
-          exact = TRUE
-        )
+        last_diag <- res
       }
+    }
+    out_norm <- normalize_written_outfiles(outfile)
+    if (isTRUE(tuning$diagnostics) && !is.null(last_diag)) {
+      attr(out_norm, "fastqindexr_diagnostics") <- attr(
+        last_diag,
+        "fastqindexr_diagnostics",
+        exact = TRUE
+      )
     }
     return(invisible(out_norm))
   }
@@ -1048,7 +1058,7 @@ extract_sequences_to_file <- function(
     stop("`compress` must be TRUE or FALSE.", call. = FALSE)
   }
   if (length(seq_idx) < 1L) {
-    return(invisible(normalizePath(outfile, winslash = "/", mustWork = FALSE)))
+    return(invisible(normalize_written_outfiles(outfile)))
   }
   seq_idx <- validate_seq_idx(seq_idx = seq_idx, n_records = n_records)
   if (use_streaming) {
@@ -1084,7 +1094,7 @@ extract_sequences_to_file <- function(
       diagnostics = tuning$diagnostics
     )
   }
-  out_norm <- normalizePath(outfile, winslash = "/", mustWork = FALSE)
+  out_norm <- normalize_written_outfiles(outfile)
   if (isTRUE(tuning$diagnostics)) {
     attr(out_norm, "fastqindexr_diagnostics") <- attr(
       res,

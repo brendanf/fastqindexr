@@ -35,7 +35,8 @@ bool FileLockHandler::readLock() {
   if (readLockActive) {
     return true;
   }
-  lockedFileHandle = fopen(lockedFile.string().c_str(), "rb");
+  const string path_str = lockedFile.string();
+  lockedFileHandle = fopen(path_str.c_str(), "rb");
   if (lockedFileHandle == nullptr) {
     return false;
   }
@@ -60,7 +61,8 @@ bool FileLockHandler::writeLock() {
     return false;
   }
 
-  lockedFileHandle = fopen(lockedFile.string().c_str(), "wb");
+  const string path_str = lockedFile.string();
+  lockedFileHandle = fopen(path_str.c_str(), "wb");
   if (lockedFileHandle == nullptr) {
     return false;
   }

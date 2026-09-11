@@ -1,2 +1,15 @@
+# First target must remain `all`; otherwise these Catch rules become the
+# default Make goal and the shared library is not linked.
+all: $(SHLIB)
+
 PKG_CXXFLAGS = -I. -I./fastqindex_core
 PKG_LIBS = -lz
+
+# Catch/testthat runner TUs: compile without LTO. Mixing Catch with
+# package LTO has been associated with glibc heap aborts
+# ("malloc(): unsorted double linked list corrupted") during
+# run_testthat_tests() on some Ubuntu R CMD check toolchains.
+test-runner.o: test-runner.cpp
+	$(CXX) $(ALL_CPPFLAGS) $(ALL_CXXFLAGS) -fno-lto -c $< -o $@
+test-fastqindexr.o: test-fastqindexr.cpp
+	$(CXX) $(ALL_CPPFLAGS) $(ALL_CXXFLAGS) -fno-lto -c $< -o $@

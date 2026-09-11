@@ -5,19 +5,48 @@ write_gz_lines <- function(path, lines) {
 }
 
 make_fasta_gz <- function(path) {
-  write_gz_lines(path, c(
-    ">seq1", "AAAA",
-    ">seq2", "CCCC",
-    ">seq3", "GGGG",
-    ">seq4", "TTTT"
-  ))
+  write_gz_lines(
+    path,
+    c(
+      ">seq1",
+      "AAAA",
+      ">seq2",
+      "CCCC",
+      ">seq3",
+      "GGGG",
+      ">seq4",
+      "TTTT"
+    )
+  )
 }
 
 make_fastq_gz <- function(path) {
-  write_gz_lines(path, c(
-    "@r1", "ACGT", "+", "!!!!",
-    "@r2", "TTAA", "+", "####",
-    "@r3", "GCGC", "+", "$$$$",
-    "@r4", "NANA", "+", "%%%%"
-  ))
+  write_gz_lines(
+    path,
+    c(
+      "@r1",
+      "ACGT",
+      "+",
+      "!!!!",
+      "@r2",
+      "TTAA",
+      "+",
+      "####",
+      "@r3",
+      "GCGC",
+      "+",
+      "$$$$",
+      "@r4",
+      "NANA",
+      "+",
+      "%%%%"
+    )
+  )
+}
+
+expect_same_paths <- function(actual, expected) {
+  expect_equal(
+    normalizePath(as.character(actual), winslash = "/", mustWork = TRUE),
+    normalizePath(as.character(expected), winslash = "/", mustWork = TRUE)
+  )
 }

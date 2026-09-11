@@ -31,7 +31,7 @@ This note is for future work in this repository (humans and coding agents). It c
 | `src/fastqindexr.cpp` | Rcpp exports, index registry, dense-region planning, parsing helpers |
 | `src/fastqindex_core_bridge.cpp` | **Unity build:** `#include` of the vendored `.cpp` files **once** (avoids duplicate symbols) |
 | `src/fastqindex_core/**` | Vendored FastqIndEx-style sources; `fastqindex_core` **namespace** isolates symbols |
-| `src/Makevars` | `PKG_LIBS = -lz` (zlib) |
+| `src/Makevars` | `PKG_LIBS = -lz` (zlib); Catch runner TUs compiled with `-fno-lto` |
 | `inst/LICENSE.note` | Upstream reference commit + list of vendored files + high-level change notes |
 | `src/fastqindex_core/README.md` | Shorter note on layout and the bridge; keep in sync when the file set changes |
 | `tests/testthat/` | Correctness tests; `tests/benchmarks/` for optional Biostrings comparisons |
