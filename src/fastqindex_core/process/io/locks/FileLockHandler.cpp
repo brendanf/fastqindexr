@@ -3,11 +3,20 @@
  *
  * Distributed under the MIT License (license terms are at
  * https://github.com/dkfz-odcf/FastqIndEx/blob/master/LICENSE.txt).
+ *
+ * fastqindexr (Windows):
+ * - flock(2) / <sys/file.h> are POSIX and unavailable in Rtools. On
+ *   Windows, holding an open FILE* is treated as the lock; this matches
+ *   the single-process R usage (IndexReader via FileSource).
+ * - fopen() needs a narrow path; path::c_str() is wchar_t* on Windows,
+ *   so use path::string().
  */
 
 #include "FileLockHandler.h"
 
+#ifndef _WIN32
 #include <sys/file.h>
+#endif
 
 namespace fastqindex_core {
 
@@ -26,10 +35,14 @@ bool FileLockHandler::readLock() {
   if (readLockActive) {
     return true;
   }
-  lockedFileHandle = fopen(lockedFile.c_str(), "rb");
+  lockedFileHandle = fopen(lockedFile.string().c_str(), "rb");
   if (lockedFileHandle == nullptr) {
     return false;
   }
+#ifdef _WIN32
+  readLockActive = true;
+  return true;
+#else
   const bool result = flock(fileno(lockedFileHandle), LOCK_SH | LOCK_NB) == 0;
   if (result) {
     readLockActive = true;
@@ -38,6 +51,7 @@ bool FileLockHandler::readLock() {
     lockedFileHandle = nullptr;
   }
   return result;
+#endif
 }
 
 bool FileLockHandler::writeLock() {
@@ -46,11 +60,15 @@ bool FileLockHandler::writeLock() {
     return false;
   }
 
-  lockedFileHandle = fopen(lockedFile.c_str(), "wb");
+  lockedFileHandle = fopen(lockedFile.string().c_str(), "wb");
   if (lockedFileHandle == nullptr) {
     return false;
   }
 
+#ifdef _WIN32
+  writeLockActive = true;
+  return true;
+#else
   const bool result = flock(fileno(lockedFileHandle), LOCK_EX | LOCK_NB) == 0;
   if (result) {
     writeLockActive = true;
@@ -59,6 +77,7 @@ bool FileLockHandler::writeLock() {
     lockedFileHandle = nullptr;
   }
   return result;
+#endif
 }
 
 bool FileLockHandler::hasLock() {
@@ -70,7 +89,9 @@ void FileLockHandler::unlock() {
   readLockActive = false;
   writeLockActive = false;
   if (lockedFileHandle != nullptr) {
+#ifndef _WIN32
     flock(fileno(lockedFileHandle), LOCK_UN);
+#endif
     fclose(lockedFileHandle);
     lockedFileHandle = nullptr;
   }

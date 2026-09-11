@@ -3,6 +3,9 @@
  *
  * Distributed under the MIT License (license terms are at
  * https://github.com/dkfz-odcf/FastqIndEx/blob/master/LICENSE.txt).
+ *
+ * fastqindexr (Windows): ifstream::open(path) can miss a working
+ * wchar_t overload on MinGW libstdc++; open a narrow string instead.
  */
 
 #include "FileSource.h"
@@ -35,7 +38,11 @@ bool FileSource::fulfillsPremises() {
 
 bool FileSource::open() {
   if (!fStream.is_open()) {
+#ifdef _WIN32
+    fStream.open(file.string(), std::ifstream::binary);
+#else
     fStream.open(file, std::ifstream::binary);
+#endif
   }
   return fStream.is_open();
 }

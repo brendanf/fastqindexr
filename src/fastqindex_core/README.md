@@ -45,3 +45,6 @@ Current adapted files:
 Each adapted file contains inline notes for:
 - `fastqindexr change` blocks in modified functions used by this package.
 - omitted upstream functions that are intentionally not included in this adapted subset.
+- Windows (`_WIN32`) replacements for POSIX-only APIs in `common/IOHelper.cpp`
+  and `process/io/locks/FileLockHandler.cpp` (and a MinGW `ifstream` open
+  workaround in `process/io/FileSource.cpp`). Unix code paths stay as upstream.

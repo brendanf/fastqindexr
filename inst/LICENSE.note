@@ -53,6 +53,10 @@ Current adaptation scope:
   - src/fastqindex_core/process/io/locks/FileLockHandler.cpp
 
 Annotated local changes in adapted core:
+- fastqindexr change: Windows portability shims in IOHelper.cpp,
+  FileLockHandler.cpp, and FileSource.cpp for POSIX APIs that Rtools
+  does not provide (pwd.h/getpwuid, flock, mkfifo, mkdtemp/mkstemp,
+  realpath, readlink). Unix implementations are unchanged.
 - fastqindexr change: Replace FastqIndEx Source/Sink abstractions with
   std::ifstream and in-memory index registry token handling.
 - fastqindexr change: Keep dictionary payload uncompressed in memory (no .fqi

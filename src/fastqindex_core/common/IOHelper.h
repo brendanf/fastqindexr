@@ -25,6 +25,7 @@ namespace fastqindex_core {
 /**
  * fastqindexr: For report() and the check* helpers, pass a non-null
  * ErrorAccumulator; a null pointer drops messages (no stderr fallback).
+ * Windows implementations of POSIX helpers live in IOHelper.cpp.
  */
 class IOHelper {
 

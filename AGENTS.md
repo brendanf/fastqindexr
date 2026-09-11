@@ -60,7 +60,8 @@ Internal helpers `validate_input_files` / `validate_index` are **`@noRd`**: not 
 
 ## Continuous integration
 
-- **`.github/workflows/r-cmd-check.yaml`:** `R CMD check` with `--no-manual` and CRAN-like args.
+- **`.github/workflows/r-cmd-check.yaml`:** r-lib `check-standard` matrix (`macos-latest` /
+  `windows-latest` / Ubuntu devel+release+oldrel-1) with `--no-manual` and CRAN-like args.
 - **`.github/workflows/test-coverage.yaml`:** tests + **`covr::codecov()`**; repository must have Codecov (or similar) set up for badges to be meaningful.
 - Pushes/PRs to **`main` or `master`**.
 
