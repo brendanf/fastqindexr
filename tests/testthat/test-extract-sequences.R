@@ -479,3 +479,87 @@ test_that("extract_sequences output is stable across density and region-merge gr
     }
   }
 })
+
+test_that("extract_sequences renumber rewrites seq_id positions", {
+  path <- tempfile(fileext = ".fa.gz")
+  on.exit(unlink(path), add = TRUE)
+  make_fasta_gz(path)
+  idx <- create_index(path, type = "fasta")
+
+  zero <- extract_sequences(idx, c(3L, 1L, 3L), renumber = "zero_based")
+  expect_equal(zero$seq_id, c("0", "1", "2"))
+  expect_equal(zero$seq, c("GGGG", "AAAA", "GGGG"))
+
+  one <- extract_sequences(idx, c(3L, 1L, 3L), renumber = "one_based")
+  expect_equal(one$seq_id, c("1", "2", "3"))
+
+  s <- extract_sequences(
+    idx,
+    c(2L, 4L),
+    return = "seq",
+    renumber = "one_based"
+  )
+  expect_equal(names(s), c("1", "2"))
+  expect_equal(unname(s), c("CCCC", "TTTT"))
+})
+
+test_that("extract_sequences mode='indexed' explicit matches baseline", {
+  path <- tempfile(fileext = ".fa.gz")
+  on.exit(unlink(path), add = TRUE)
+  make_fasta_gz(path)
+  idx <- create_index(path, type = "fasta")
+
+  ref <- extract_sequences(idx, c(2L, 4L, 1L))
+  got <- extract_sequences(idx, c(2L, 4L, 1L), mode = "indexed")
+  expect_equal(got, ref)
+})
+
+test_that("extract_sequences index=NULL streams gzip FASTA without index", {
+  path <- tempfile(fileext = ".fa.gz")
+  on.exit(unlink(path), add = TRUE)
+  make_fasta_gz(path)
+
+  out <- extract_sequences(
+    index = NULL,
+    seq_idx = c(3L, 1L, 3L),
+    file = path,
+    type = "auto"
+  )
+  expect_equal(out$seq_id, c("seq3", "seq1", "seq3"))
+  expect_equal(out$seq, c("GGGG", "AAAA", "GGGG"))
+})
+
+test_that("extract_sequences index=NULL streams plain FASTQ without index", {
+  path <- tempfile(fileext = ".fq")
+  on.exit(unlink(path), add = TRUE)
+  writeLines(
+    c("@r1", "ACGT", "+", "!!!!", "@r2", "TTAA", "+", "####"),
+    path
+  )
+
+  out <- extract_sequences(
+    index = NULL,
+    seq_idx = c(2L, 1L),
+    file = path,
+    type = "fastq"
+  )
+  expect_equal(out$seq_id, c("r2", "r1"))
+  expect_equal(out$seq, c("TTAA", "ACGT"))
+  expect_equal(out$qual, c("####", "!!!!"))
+})
+
+test_that("extract_sequences index=NULL handles gzip FASTQ format detection", {
+  path <- tempfile(fileext = ".fq.gz")
+  on.exit(unlink(path), add = TRUE)
+  make_fastq_gz(path)
+
+  out <- extract_sequences(
+    index = NULL,
+    seq_idx = c(4L, 2L),
+    file = path,
+    type = "auto",
+    return = "list"
+  )
+  expect_equal(out$seq_id, c("r4", "r2"))
+  expect_equal(out$qual, c("%%%%", "####"))
+})

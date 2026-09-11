@@ -294,3 +294,140 @@ test_that("partitioned extraction matches in-memory for contiguous and round_rob
     c(rbind(paste0(">", ex_r2$seq_id), ex_r2$seq))
   )
 })
+
+test_that("extract_sequences_to_file renumber=zero_based rewrites FASTA headers", {
+  in_path <- tempfile(fileext = ".fa.gz")
+  out <- tempfile(fileext = ".fa")
+  on.exit(unlink(c(in_path, out)), add = TRUE)
+  make_fasta_gz(in_path)
+  idx <- create_index(in_path, type = "fasta")
+
+  extract_sequences_to_file(
+    idx,
+    c(3L, 1L, 3L),
+    outfile = out,
+    renumber = "zero_based"
+  )
+  expect_equal(
+    readLines(out, warn = FALSE),
+    c(">0", "GGGG", ">1", "AAAA", ">2", "GGGG")
+  )
+})
+
+test_that("extract_sequences_to_file renumber=one_based emits FASTQ headers", {
+  in_path <- tempfile(fileext = ".fq.gz")
+  out <- tempfile(fileext = ".fq")
+  on.exit(unlink(c(in_path, out)), add = TRUE)
+  make_fastq_gz(in_path)
+  idx <- create_index(in_path, type = "fastq")
+
+  extract_sequences_to_file(
+    idx,
+    c(4L, 2L),
+    outfile = out,
+    type = "fastq",
+    renumber = "one_based"
+  )
+  expect_equal(
+    readLines(out, warn = FALSE),
+    c("@1", "NANA", "+", "%%%%", "@2", "TTAA", "+", "####")
+  )
+})
+
+test_that("extract_sequences_to_file renumber + partitioned outputs", {
+  in_path <- tempfile(fileext = ".fa.gz")
+  out1 <- tempfile(fileext = ".fa")
+  out2 <- tempfile(fileext = ".fa")
+  on.exit(unlink(c(in_path, out1, out2)), add = TRUE)
+  make_fasta_gz(in_path)
+  idx <- create_index(in_path, type = "fasta")
+
+  extract_sequences_to_file(
+    idx,
+    seq_idx = list(c(3L, 1L), integer(), c(2L, 4L)),
+    outfile = c(out1, tempfile(fileext = ".fa"), out2),
+    renumber = "zero_based"
+  )
+  expect_equal(
+    readLines(out1, warn = FALSE),
+    c(">0", "GGGG", ">1", "AAAA")
+  )
+  # Renumber restarts within each partition.
+  expect_equal(
+    readLines(out2, warn = FALSE),
+    c(">0", "CCCC", ">1", "TTTT")
+  )
+})
+
+test_that("extract_sequences_to_file index=NULL streams FASTA records", {
+  in_path <- tempfile(fileext = ".fa.gz")
+  out <- tempfile(fileext = ".fa")
+  on.exit(unlink(c(in_path, out)), add = TRUE)
+  make_fasta_gz(in_path)
+
+  extract_sequences_to_file(
+    index = NULL,
+    seq_idx = c(2L, 4L),
+    file = in_path,
+    outfile = out,
+    type = "fasta"
+  )
+  expect_equal(
+    readLines(out, warn = FALSE),
+    c(">seq2", "CCCC", ">seq4", "TTTT")
+  )
+})
+
+test_that("extract_sequences_to_file index=NULL streams partitioned FASTQ", {
+  in_path <- tempfile(fileext = ".fq.gz")
+  out1 <- tempfile(fileext = ".fq")
+  out2 <- tempfile(fileext = ".fq")
+  on.exit(unlink(c(in_path, out1, out2)), add = TRUE)
+  make_fastq_gz(in_path)
+
+  extract_sequences_to_file(
+    index = NULL,
+    seq_idx = list(c(1L, 3L), c(4L)),
+    file = in_path,
+    outfile = c(out1, out2),
+    type = "fastq",
+    mode = "sequential"
+  )
+  expect_equal(
+    readLines(out1, warn = FALSE),
+    c("@r1", "ACGT", "+", "!!!!", "@r3", "GCGC", "+", "$$$$")
+  )
+  expect_equal(
+    readLines(out2, warn = FALSE),
+    c("@r4", "NANA", "+", "%%%%")
+  )
+})
+
+test_that("extract_sequences_to_file rejects FASTQ output from FASTA input", {
+  in_path <- tempfile(fileext = ".fa.gz")
+  out <- tempfile(fileext = ".fq")
+  on.exit(unlink(c(in_path, out)), add = TRUE)
+  make_fasta_gz(in_path)
+  idx <- create_index(in_path, type = "fasta")
+
+  expect_error(
+    extract_sequences_to_file(
+      idx,
+      c(1L, 2L),
+      outfile = out,
+      type = "fastq"
+    ),
+    "Cannot emit FASTQ output from FASTA"
+  )
+
+  expect_error(
+    extract_sequences_to_file(
+      idx,
+      c(1L, 2L),
+      outfile = out,
+      type = "fastq",
+      renumber = "zero_based"
+    ),
+    "Cannot emit FASTQ output from FASTA"
+  )
+})

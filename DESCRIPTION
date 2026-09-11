@@ -22,9 +22,11 @@ Imports:
 Suggests:
     testthat (>= 3.0.0),
     Biostrings,
-    roxygen2 (>= 7.0.0)
+    roxygen2 (>= 7.0.0),
+    xml2
 LinkingTo:
-    Rcpp
+    Rcpp,
+    testthat
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3

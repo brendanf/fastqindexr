@@ -196,6 +196,8 @@ BEGIN_RCPP
 END_RCPP
 }
 
+RcppExport SEXP run_testthat_tests(SEXP);
+
 static const R_CallMethodDef CallEntries[] = {
     {"_fastqindexr_cpp_create_index", (DL_FUNC) &_fastqindexr_cpp_create_index, 2},
     {"_fastqindexr_cpp_read_fqi_index", (DL_FUNC) &_fastqindexr_cpp_read_fqi_index, 3},
@@ -209,6 +211,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastqindexr_cpp_extract_sequences_streaming", (DL_FUNC) &_fastqindexr_cpp_extract_sequences_streaming, 6},
     {"_fastqindexr_cpp_extract_sequences_to_file_streaming", (DL_FUNC) &_fastqindexr_cpp_extract_sequences_to_file_streaming, 10},
     {"_fastqindexr_cpp_extract_sequences_dnastringset_streaming", (DL_FUNC) &_fastqindexr_cpp_extract_sequences_dnastringset_streaming, 7},
+    {"run_testthat_tests", (DL_FUNC) &run_testthat_tests, 1},
     {NULL, NULL, 0}
 };
 
