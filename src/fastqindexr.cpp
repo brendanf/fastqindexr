@@ -2634,78 +2634,109 @@ double streamSortedUniqueToFile(
   return static_cast<double>(n_written);
 }
 
-SEXP makeDNAStringSetChunk(
-  const std::vector<std::string>& seq_chunk,
-  const std::vector<std::string>& id_chunk,
-  const std::string& renumber_mode,
-  std::uint64_t output_index_start
-) {
+SEXP makeDNAStringSetChunk(const std::vector<std::string> &seq_chunk)
+{
   const R_xlen_t n = static_cast<R_xlen_t>(seq_chunk.size());
   Rcpp::CharacterVector seq_vec(n);
   for (R_xlen_t i = 0; i < n; ++i) {
     seq_vec[i] = seq_chunk[static_cast<size_t>(i)];
   }
-
   Rcpp::Environment biostrings = Rcpp::Environment::namespace_env("Biostrings");
   Rcpp::Function dna_string_set = biostrings["DNAStringSet"];
-  SEXP dna = dna_string_set(seq_vec, Rcpp::Named("use.names") = true);
-
-  Rcpp::CharacterVector out_names(n);
-  if (renumber_mode == "none") {
-    for (R_xlen_t i = 0; i < n; ++i) {
-      out_names[i] = id_chunk[static_cast<size_t>(i)];
-    }
-  } else if (renumber_mode == "zero_based") {
-    for (R_xlen_t i = 0; i < n; ++i) {
-      out_names[i] = std::to_string(output_index_start + static_cast<std::uint64_t>(i));
-    }
-  } else {
-    for (R_xlen_t i = 0; i < n; ++i) {
-      out_names[i] = std::to_string(output_index_start + static_cast<std::uint64_t>(i) + 1);
-    }
-  }
-  Rcpp::Function set_names = Rcpp::Function("names<-");
-  return set_names(dna, out_names);
+  // Leave chunks unnamed. c() of named DNAStringSet objects hits an
+  // S4Vectors bindROWS error on some BioC releases ("character" in
+  // IntegerAnswer) and can segfault on others. Names are set once after
+  // the chunks are concatenated.
+  return dna_string_set(seq_vec, Rcpp::Named("use.names") = false);
 }
 
 void flushDNAChunk(
-  std::vector<std::string>* seq_chunk,
-  std::vector<std::string>* id_chunk,
-  Rcpp::List* dna_chunks,
-  const std::string& renumber_mode,
-  std::uint64_t output_index_start
-) {
+    std::vector<std::string> *seq_chunk,
+    std::vector<std::string> *id_chunk,
+    Rcpp::List *dna_chunks,
+    std::vector<std::string> *all_ids)
+{
   if (seq_chunk->empty()) {
     return;
   }
-  dna_chunks->push_back(
-    makeDNAStringSetChunk(*seq_chunk, *id_chunk, renumber_mode, output_index_start)
-  );
+  all_ids->insert(all_ids->end(), id_chunk->begin(), id_chunk->end());
+  dna_chunks->push_back(makeDNAStringSetChunk(*seq_chunk));
   seq_chunk->clear();
   id_chunk->clear();
 }
 
 void appendRecordToDNAChunks(
-  const ParsedRecord& rec,
-  std::uint64_t chunk_chars_limit,
-  std::vector<std::string>* seq_chunk,
-  std::vector<std::string>* id_chunk,
-  std::uint64_t* chunk_chars,
-  std::uint64_t* output_index,
-  Rcpp::List* dna_chunks,
-  const std::string& renumber_mode
-) {
+    const ParsedRecord &rec,
+    std::uint64_t chunk_chars_limit,
+    std::vector<std::string> *seq_chunk,
+    std::vector<std::string> *id_chunk,
+    std::uint64_t *chunk_chars,
+    Rcpp::List *dna_chunks,
+    std::vector<std::string> *all_ids)
+{
   const std::uint64_t rec_chars = static_cast<std::uint64_t>(rec.seq.size());
   if (!seq_chunk->empty() && (*chunk_chars + rec_chars > chunk_chars_limit)) {
-    const std::uint64_t chunk_start = *output_index - seq_chunk->size();
-    flushDNAChunk(seq_chunk, id_chunk, dna_chunks, renumber_mode, chunk_start);
+    flushDNAChunk(seq_chunk, id_chunk, dna_chunks, all_ids);
     *chunk_chars = 0;
   }
 
   seq_chunk->push_back(rec.seq);
   id_chunk->push_back(rec.id);
   *chunk_chars += rec_chars;
-  (*output_index)++;
+}
+
+SEXP combineDNAChunks(
+    Rcpp::List dna_chunks,
+    const std::vector<std::string> &ids,
+    const std::string &renumber_mode)
+{
+  Rcpp::Environment biostrings = Rcpp::Environment::namespace_env("Biostrings");
+  Rcpp::Function dna_string_set = biostrings["DNAStringSet"];
+  // Keep the concatenated set protected while names are allocated.
+  Rcpp::RObject dna;
+  if (dna_chunks.size() == 0)
+  {
+    dna = dna_string_set(
+        Rcpp::CharacterVector(),
+        Rcpp::Named("use.names") = false);
+  }
+  else if (dna_chunks.size() == 1)
+  {
+    dna = Rcpp::RObject(static_cast<SEXP>(dna_chunks[0]));
+  }
+  else
+  {
+    Rcpp::Environment base = Rcpp::Environment::base_env();
+    Rcpp::Function do_call = base["do.call"];
+    Rcpp::Function concat = base["c"];
+    dna = do_call(concat, dna_chunks);
+  }
+
+  const R_xlen_t n = static_cast<R_xlen_t>(ids.size());
+  Rcpp::CharacterVector out_names(n);
+  if (renumber_mode == "none")
+  {
+    for (R_xlen_t i = 0; i < n; ++i)
+    {
+      out_names[i] = ids[static_cast<size_t>(i)];
+    }
+  }
+  else if (renumber_mode == "zero_based")
+  {
+    for (R_xlen_t i = 0; i < n; ++i)
+    {
+      out_names[i] = std::to_string(static_cast<std::uint64_t>(i));
+    }
+  }
+  else
+  {
+    for (R_xlen_t i = 0; i < n; ++i)
+    {
+      out_names[i] = std::to_string(static_cast<std::uint64_t>(i) + 1);
+    }
+  }
+  Rcpp::Function set_names = Rcpp::Function("names<-");
+  return set_names(dna, out_names);
 }
 
 SEXP buildDNAStringSetFromRequested(
@@ -2729,7 +2760,7 @@ SEXP buildDNAStringSetFromRequested(
   id_chunk.reserve(1024);
   Rcpp::List dna_chunks;
   std::uint64_t chunk_chars = 0;
-  std::uint64_t output_index = 0;
+  std::vector<std::string> all_ids;
 
   if (!sorted_unique) {
     const SelectedRecordMap selected_global = collectRequestedRecords(
@@ -2752,15 +2783,13 @@ SEXP buildDNAStringSetFromRequested(
         throw std::runtime_error("Could not resolve all requested ids with provided index/files.");
       }
       appendRecordToDNAChunks(
-        it->second,
-        chunk_chars_limit,
-        &seq_chunk,
-        &id_chunk,
-        &chunk_chars,
-        &output_index,
-        &dna_chunks,
-        renumber_mode
-      );
+          it->second,
+          chunk_chars_limit,
+          &seq_chunk,
+          &id_chunk,
+          &chunk_chars,
+          &dna_chunks,
+          &all_ids);
     }
   } else {
     std::vector<std::vector<std::uint64_t>> local_ids_by_file(bundle.files.size());
@@ -2806,44 +2835,41 @@ SEXP buildDNAStringSetFromRequested(
             throw std::runtime_error("Could not resolve all requested ids with provided index/files.");
           }
           appendRecordToDNAChunks(
-            it->second,
-            chunk_chars_limit,
-            &seq_chunk,
-            &id_chunk,
-            &chunk_chars,
-            &output_index,
-            &dna_chunks,
-            renumber_mode
-          );
+              it->second,
+              chunk_chars_limit,
+              &seq_chunk,
+              &id_chunk,
+              &chunk_chars,
+              &dna_chunks,
+              &all_ids);
         }
         continue;
       }
       if (isPlainIndexedFile(*bundle.indexed_files[file_idx]) && mode == ExtractExecutionMode::Indexed) {
         const auto& offs = asPlainIndexedFile(*bundle.indexed_files[file_idx]).plain_header_byte_offsets;
         extractPlainIndexedRecords(
-          Rcpp::as<std::string>(files[file_idx]),
-          local_ids,
-          offs,
-          bundle.format,
-          false,
-          max_bridge_gap,
-          max_region_records,
-          bundle.record_size,
-          [&](std::uint64_t, const ParsedRecord& rec) {
-            appendRecordToDNAChunks(
-              rec,
-              chunk_chars_limit,
-              &seq_chunk,
-              &id_chunk,
-              &chunk_chars,
-              &output_index,
-              &dna_chunks,
-              renumber_mode
-            );
-          }
-          #ifdef FASTQINDEXR_TIMING
-          ,
-          diag
+            Rcpp::as<std::string>(files[file_idx]),
+            local_ids,
+            offs,
+            bundle.format,
+            false,
+            max_bridge_gap,
+            max_region_records,
+            bundle.record_size,
+            [&](std::uint64_t, const ParsedRecord &rec)
+            {
+              appendRecordToDNAChunks(
+                  rec,
+                  chunk_chars_limit,
+                  &seq_chunk,
+                  &id_chunk,
+                  &chunk_chars,
+                  &dna_chunks,
+                  &all_ids);
+            }
+#ifdef FASTQINDEXR_TIMING
+            ,
+            diag
           #endif
         );
         continue;
@@ -2892,29 +2918,28 @@ SEXP buildDNAStringSetFromRequested(
             const std::unordered_set<std::uint64_t> region_requested_set(region_begin, region_end_it);
             std::uint64_t selected_records = 0;
             extractGzipFastaLogicalRegion(
-              Rcpp::as<std::string>(files[file_idx]),
-              &extractor,
-              gz_idx,
-              region_start,
-              region_end,
-              region_requested_set,
-              false,
-              [&](std::uint64_t, ParsedRecord&& rec) {
-                appendRecordToDNAChunks(
-                  rec,
-                  chunk_chars_limit,
-                  &seq_chunk,
-                  &id_chunk,
-                  &chunk_chars,
-                  &output_index,
-                  &dna_chunks,
-                  renumber_mode
-                );
-                selected_records++;
-              }
-              #ifdef FASTQINDEXR_TIMING
-              ,
-              diag
+                Rcpp::as<std::string>(files[file_idx]),
+                &extractor,
+                gz_idx,
+                region_start,
+                region_end,
+                region_requested_set,
+                false,
+                [&](std::uint64_t, ParsedRecord &&rec)
+                {
+                  appendRecordToDNAChunks(
+                      rec,
+                      chunk_chars_limit,
+                      &seq_chunk,
+                      &id_chunk,
+                      &chunk_chars,
+                      &dna_chunks,
+                      &all_ids);
+                  selected_records++;
+                }
+#ifdef FASTQINDEXR_TIMING
+                ,
+                diag
               #endif
             );
             if (selected_records < requested_in_region) {
@@ -2937,15 +2962,13 @@ SEXP buildDNAStringSetFromRequested(
               [&](std::uint64_t, const fastqindex_core::ExtractedRecord& rec_in) {
                 const ParsedRecord rec{rec_in.seq_id, rec_in.seq, ""};
                 appendRecordToDNAChunks(
-                  rec,
-                  chunk_chars_limit,
-                  &seq_chunk,
-                  &id_chunk,
-                  &chunk_chars,
-                  &output_index,
-                  &dna_chunks,
-                  renumber_mode
-                );
+                    rec,
+                    chunk_chars_limit,
+                    &seq_chunk,
+                    &id_chunk,
+                    &chunk_chars,
+                    &dna_chunks,
+                    &all_ids);
                 extracted_records++;
               }
             );
@@ -2986,15 +3009,13 @@ SEXP buildDNAStringSetFromRequested(
               [&](std::uint64_t, const fastqindex_core::ExtractedRecord& rec_in) {
                 const ParsedRecord rec{rec_in.seq_id, rec_in.seq, ""};
                 appendRecordToDNAChunks(
-                  rec,
-                  chunk_chars_limit,
-                  &seq_chunk,
-                  &id_chunk,
-                  &chunk_chars,
-                  &output_index,
-                  &dna_chunks,
-                  renumber_mode
-                );
+                    rec,
+                    chunk_chars_limit,
+                    &seq_chunk,
+                    &id_chunk,
+                    &chunk_chars,
+                    &dna_chunks,
+                    &all_ids);
                 selected_records++;
               }
               #ifdef FASTQINDEXR_TIMING
@@ -3056,37 +3077,22 @@ SEXP buildDNAStringSetFromRequested(
             throw std::runtime_error("Could not resolve all requested ids with provided index/files.");
           }
           appendRecordToDNAChunks(
-            it->second,
-            chunk_chars_limit,
-            &seq_chunk,
-            &id_chunk,
-            &chunk_chars,
-            &output_index,
-            &dna_chunks,
-            renumber_mode
-          );
+              it->second,
+              chunk_chars_limit,
+              &seq_chunk,
+              &id_chunk,
+              &chunk_chars,
+              &dna_chunks,
+              &all_ids);
         }
       }
     }
   }
 
   if (!seq_chunk.empty()) {
-    const std::uint64_t chunk_start = output_index - seq_chunk.size();
-    flushDNAChunk(&seq_chunk, &id_chunk, &dna_chunks, renumber_mode, chunk_start);
+    flushDNAChunk(&seq_chunk, &id_chunk, &dna_chunks, &all_ids);
   }
-
-  if (dna_chunks.size() == 0) {
-    Rcpp::Environment biostrings = Rcpp::Environment::namespace_env("Biostrings");
-    Rcpp::Function dna_string_set = biostrings["DNAStringSet"];
-    return dna_string_set(Rcpp::CharacterVector(), Rcpp::Named("use.names") = true);
-  }
-  if (dna_chunks.size() == 1) {
-    return dna_chunks[0];
-  }
-  Rcpp::Environment base = Rcpp::Environment::base_env();
-  Rcpp::Function do_call = base["do.call"];
-  Rcpp::Function concat = base["c"];
-  return do_call(concat, dna_chunks);
+  return combineDNAChunks(dna_chunks, all_ids, renumber_mode);
 }
 
 std::uint64_t countPlainTotalLines(const std::string& path) {
@@ -3674,18 +3680,18 @@ SEXP cpp_extract_sequences_dnastringset(
   }
 
   const std::vector<std::uint64_t> requested = parseRequestedIds(ids_zero_based);
-  SEXP out = buildDNAStringSetFromRequested(
-    files,
-    bundle,
-    requested,
-    static_cast<std::uint64_t>(chunk_chars),
-    renumber_mode,
-    bridge_gap,
-    region_records,
-    mode
-    #ifdef FASTQINDEXR_TIMING
-    ,
-    diag_ptr
+  Rcpp::RObject out = buildDNAStringSetFromRequested(
+      files,
+      bundle,
+      requested,
+      static_cast<std::uint64_t>(chunk_chars),
+      renumber_mode,
+      bridge_gap,
+      region_records,
+      mode
+#ifdef FASTQINDEXR_TIMING
+      ,
+      diag_ptr
     #endif
   );
   #ifdef FASTQINDEXR_TIMING
@@ -4080,7 +4086,7 @@ SEXP cpp_extract_sequences_dnastringset_streaming(
   Rcpp::List dna_chunks;
   std::uint64_t chunk_chars_u = static_cast<std::uint64_t>(chunk_chars);
   std::uint64_t chunk_chars_acc = 0;
-  std::uint64_t output_index = 0;
+  std::vector<std::string> all_ids;
 
   for (auto gid : requested) {
     auto it = selected_global.find(gid);
@@ -4088,47 +4094,20 @@ SEXP cpp_extract_sequences_dnastringset_streaming(
       throw std::runtime_error("Could not resolve all requested ids (streaming DNA extract).");
     }
     appendRecordToDNAChunks(
-      it->second,
-      chunk_chars_u,
-      &seq_chunk,
-      &id_chunk,
-      &chunk_chars_acc,
-      &output_index,
-      &dna_chunks,
-      renumber_mode
-    );
+        it->second,
+        chunk_chars_u,
+        &seq_chunk,
+        &id_chunk,
+        &chunk_chars_acc,
+        &dna_chunks,
+        &all_ids);
   }
 
   if (!seq_chunk.empty()) {
-    const std::uint64_t chunk_start = output_index - seq_chunk.size();
-    flushDNAChunk(&seq_chunk, &id_chunk, &dna_chunks, renumber_mode, chunk_start);
+    flushDNAChunk(&seq_chunk, &id_chunk, &dna_chunks, &all_ids);
   }
-
-  if (dna_chunks.size() == 0) {
-    Rcpp::Environment biostrings = Rcpp::Environment::namespace_env("Biostrings");
-    Rcpp::Function dna_string_set = biostrings["DNAStringSet"];
-    SEXP empty = dna_string_set(Rcpp::CharacterVector(), Rcpp::Named("use.names") = true);
-    #ifdef FASTQINDEXR_TIMING
-    if (diagnostics && diag_ptr != nullptr) {
-      Rf_setAttrib(empty, Rf_install("fastqindexr_diagnostics"), diagnosticsToList(diag));
-    }
-    #endif
-    return empty;
-  }
-  if (dna_chunks.size() == 1) {
-    SEXP one = dna_chunks[0];
-    #ifdef FASTQINDEXR_TIMING
-    if (diagnostics && diag_ptr != nullptr) {
-      Rf_setAttrib(one, Rf_install("fastqindexr_diagnostics"), diagnosticsToList(diag));
-    }
-    #endif
-    return one;
-  }
-  Rcpp::Environment base = Rcpp::Environment::base_env();
-  Rcpp::Function do_call = base["do.call"];
-  Rcpp::Function concat = base["c"];
-  SEXP out = do_call(concat, dna_chunks);
-  #ifdef FASTQINDEXR_TIMING
+  Rcpp::RObject out = combineDNAChunks(dna_chunks, all_ids, renumber_mode);
+#ifdef FASTQINDEXR_TIMING
   if (diagnostics && diag_ptr != nullptr) {
     Rf_setAttrib(out, Rf_install("fastqindexr_diagnostics"), diagnosticsToList(diag));
   }

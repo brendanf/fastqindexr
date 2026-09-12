@@ -63,6 +63,27 @@ test_that("extract_sequences_dnastringset streaming works without index", {
   expect_equal(unname(as.character(out)), c("CCCC", "TTTT"))
 })
 
+test_that("extract_sequences_dnastringset sequential concatenates multiple chunks", {
+  skip_if_not_installed("Biostrings")
+  path <- tempfile(fileext = ".fa.gz")
+  on.exit(unlink(path), add = TRUE)
+  make_fasta_gz(path)
+  idx <- create_index(path, type = "fasta")
+  ids <- c(3L, 1L, 3L, 2L, 4L)
+  out <- extract_sequences_dnastringset(
+    idx,
+    ids,
+    mode = "sequential",
+    chunk_chars = 6,
+    renumber = "none"
+  )
+  expect_equal(names(out), c("seq3", "seq1", "seq3", "seq2", "seq4"))
+  expect_equal(
+    unname(as.character(out)),
+    c("GGGG", "AAAA", "GGGG", "CCCC", "TTTT")
+  )
+})
+
 test_that("extract_sequences_dnastringset streaming honors renumber and empty input", {
   skip_if_not_installed("Biostrings")
   path <- tempfile(fileext = ".fa.gz")
