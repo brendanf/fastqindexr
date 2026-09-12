@@ -36,8 +36,12 @@ bool ZLibBasedFASTQProcessorBaseClass::readCompressedDataFromSource(
 }
 
 bool ZLibBasedFASTQProcessorBaseClass::checkStreamForBlockEnd(const z_stream& strm) const {
-  // fastqindexr change: same bit-test semantics as upstream helper.
-  return (strm.data_type & 128) != 0 && !(strm.data_type & 64) != 0;
+  // fastqindexr change: same bits as upstream
+  // `!(data_type & 64) != 0`, written without `!`/`!=` mixing so Clang
+  // -Wlogical-not-parentheses is silent. zlib: 128 = end of a deflate
+  // block, 64 = last block of the stream. Index entries are stored at
+  // block ends that are not the stream's last block.
+  return (strm.data_type & 128) != 0 && (strm.data_type & 64) == 0;
 }
 
 std::vector<std::string> ZLibBasedFASTQProcessorBaseClass::splitStr(const std::string& s) {
